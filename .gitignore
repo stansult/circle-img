@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+*-circle.png
+*-circle-preview.png
+*-contact.png
+*-contact-preview.png
+.DS_Store
