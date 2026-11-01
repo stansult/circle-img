@@ -122,11 +122,12 @@ metadata, file protection, CLI errors, and preview behavior. Regression checks
 should be shown to fail under a narrow temporary fault before being accepted;
 restore the implementation and rerun the complete suite afterward.
 
-For visual verification with the example image in this folder:
+For visual verification with the AI-generated blue ribbon fixture under
+`tests/fixtures/` (also used by the CI direct-execution check):
 
 ```bash
 ./circle-img.py \
-  -i ticketnetworkdotcom-mark-fullcolor-10979@4x.png --margin 12 --preview -v
+  -i tests/fixtures/blue-ribbons.png --margin 12 --preview -v
 ```
 
 Inspect both the square output and circular preview. Generated circle images

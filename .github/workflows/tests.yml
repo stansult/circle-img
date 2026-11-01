@@ -36,4 +36,4 @@ jobs:
       - name: Run complete test suite
         run: .venv/bin/python -m unittest discover -s tests -v
       - name: Verify direct CLI execution
-        run: ./circle-img.py -i ticketnetworkdotcom-mark-fullcolor-10979@4x.png --margin 12 --preview
+        run: ./circle-img.py -i tests/fixtures/blue-ribbons.png --margin 12 --preview
