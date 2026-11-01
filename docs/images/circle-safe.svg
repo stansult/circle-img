@@ -1,12 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="480" height="220" viewBox="0 0 480 220" role="img" aria-labelledby="title description">
   <title id="title">Square artwork, ready for a circular crop</title>
-  <desc id="description">A blue square containing an asterisk gains padding on a larger square canvas with the same solid rectangular border. A thin dashed purple circle is a crop guide, not part of the output image, showing that all four artwork corners fit inside the circular crop.</desc>
+  <desc id="description">A blue square containing an asterisk gains padding on a larger square canvas with the same solid rectangular border. A thin dashed red circle is a crop guide, not part of the output image, showing that all four artwork corners fit inside the circular crop.</desc>
+  <defs>
+    <filter id="image-shadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#0f172a" flood-opacity="0.24"/>
+    </filter>
+  </defs>
   <rect width="480" height="220" rx="16" fill="#f8fafc"/>
-  <g fill="none" stroke="#94a3b8" stroke-width="2">
-    <rect x="40" y="48" width="112" height="112" rx="2"/>
-    <rect x="302" y="38" width="132" height="132" rx="2"/>
+  <g fill="#f8fafc" stroke="#94a3b8" stroke-width="2">
+    <rect x="40" y="48" width="112" height="112" rx="2" filter="url(#image-shadow)"/>
+    <rect x="300" y="36" width="136" height="136" rx="2" filter="url(#image-shadow)"/>
   </g>
-  <circle cx="368" cy="104" r="66" fill="none" stroke="#8b5cf6" stroke-width="1.25" stroke-dasharray="4 4"/>
+  <circle cx="368" cy="104" r="66" fill="none" stroke="#cb0808" stroke-width=".7" stroke-dasharray="4 3"/>
   <g fill="#087bfa">
     <rect x="50" y="58" width="92" height="92" rx="3"/>
     <rect x="322" y="58" width="92" height="92" rx="3"/>
