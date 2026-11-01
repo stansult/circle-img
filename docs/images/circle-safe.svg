@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="480" height="220" viewBox="0 0 480 220" role="img" aria-labelledby="title description">
   <title id="title">Square artwork, ready for a circular crop</title>
-  <desc id="description">A blue square containing an asterisk becomes centered inside a larger circle. Added space keeps all four corners of the artwork inside the circular crop.</desc>
+  <desc id="description">A blue square containing an asterisk gains padding on a larger square canvas with the same solid rectangular border. A thin dashed purple circle is a crop guide, not part of the output image, showing that all four artwork corners fit inside the circular crop.</desc>
   <rect width="480" height="220" rx="16" fill="#f8fafc"/>
   <g fill="none" stroke="#94a3b8" stroke-width="2">
     <rect x="40" y="48" width="112" height="112" rx="2"/>
-    <rect x="292" y="28" width="152" height="152" rx="2" stroke-dasharray="5 5"/>
+    <rect x="292" y="28" width="152" height="152" rx="2"/>
   </g>
-  <circle cx="368" cy="104" r="76" fill="#fff" stroke="#334155" stroke-width="2"/>
+  <circle cx="368" cy="104" r="76" fill="none" stroke="#8b5cf6" stroke-width="1.25" stroke-dasharray="4 4"/>
   <g fill="#087bfa">
     <rect x="50" y="58" width="92" height="92" rx="3"/>
     <rect x="322" y="58" width="92" height="92" rx="3"/>
