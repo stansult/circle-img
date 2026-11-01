@@ -108,6 +108,11 @@ Run the complete suite:
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
+GitHub Actions runs this suite on pushes to `main` and pull requests, using
+Python 3.11 and 3.15 on Linux and Python 3.15 on macOS. Each job creates the
+documented `.venv` and also checks direct CLI execution with the sample image.
+The [Tests workflow](.github/workflows/tests.yml) can also be started manually.
+
 Tests use generated, explicitly checked fixtures and independently check every
 foreground pixel corner against the output circle. Coverage includes alpha and
 pixel preservation, circle geometry, margins, flood-fill boundaries, masks,
