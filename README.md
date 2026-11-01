@@ -4,6 +4,8 @@ Prepare images for circular crops without cutting off meaningful content.
 Useful for Google Contacts, avatars, and profile pictures. Output is a square
 PNG with enough space for a centered, inscribed circular crop.
 
+![Square artwork gains enough padding to fit entirely inside a circular crop.](docs/images/circle-safe.svg)
+
 ## Install and run
 
 Requires Python 3.11+ and Pillow 13. From this folder:
