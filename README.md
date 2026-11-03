@@ -18,6 +18,7 @@ python3 -m venv .venv
 
 ```bash
 ./circle-img.py -i logo.png -o avatar.png --margin 12 --preview
+./circle-img.py -i logo.png -o exports/  # existing folder: exports/logo.png
 ./circle-img.py -i logo.png --background '#f5f5f5'
 ./circle-img.py -i logo.png --background transparent
 ./circle-img.py -i logo.jpg --source-background white --tolerance 10
@@ -34,7 +35,7 @@ The setup above is only needed once; nothing is installed automatically.
 | Option | Behavior |
 | --- | --- |
 | `-i`, `--input FILE` | One raster image; required. |
-| `-o`, `--output FILE` | PNG destination, default `<input-stem>-circle.png` beside input. Parent must exist. |
+| `-o`, `--output FILE\|DIR` | PNG file or existing directory. A directory keeps the input filename for PNG inputs; other extensions become `.png`. Default: `<input-stem>-circle.png` beside input. Parent must exist. |
 | `-b`, `--background COLOR` | Destination background: `white` by default, a Pillow color name, hex color, or `transparent`. |
 | `--margin N` | Nonnegative integer minimum clearance from content to the **circle**, in output pixels; default 0. |
 | `--source-background COLOR` | Explicit opaque source background color; overrides alpha-based detection. |
@@ -98,6 +99,14 @@ output and use the full centered crop. The script cannot control a service's
 resizing, compression, transparency handling, or a manually repositioned crop.
 
 Writes use a temporary file beside each destination and atomic publication.
+With `-o exports/`, an existing directory receives `logo.png` for input `logo.png`,
+or `photo.png` for input `photo.jpg`. PNG filename capitalization is preserved.
+The optional preview is saved beside the result as `<output-stem>-preview.png`.
+Directories are not created automatically; a destination that is not an existing
+directory is treated as an explicit PNG filename. Selecting the input's own
+directory for a PNG input is rejected because it would replace the source,
+even with `-O`.
+
 Existing files require `-O` or `--overwrite`; inputs and masks cannot be destinations,
 even through symlinks or hard links. Output and preview are separate writes; if
 preview writing fails after output succeeds, the output remains available.

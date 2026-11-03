@@ -154,6 +154,77 @@ class CLITests(unittest.TestCase):
             self.assertEqual(preview.getpixel((0, 0))[3], 0)
             self.assertEqual(preview.getpixel((preview.width // 2, preview.height // 2))[3], 255)
 
+    def test_output_directory_preserves_filename_and_preview(self):
+        destination = self.directory / 'export folder'
+        destination.mkdir()
+        self.assertTrue(destination.is_dir())
+        self.cli('-o', destination, '--preview')
+        self.assertEqual({p.name for p in destination.iterdir()}, {'logo.png', 'logo-preview.png'})
+        with Image.open(destination / 'logo.png') as result:
+            self.assertEqual(result.format, 'PNG')
+            self.assertEqual(result.width, result.height)
+        with Image.open(destination / 'logo-preview.png') as result:
+            self.assertEqual(result.getpixel((0, 0))[3], 0)
+
+    def test_output_directory_converts_jpeg_extension(self):
+        self.source = self.directory / 'photo.jpg'
+        image = Image.new('RGB', (17, 13), 'white')
+        ImageDraw.Draw(image).rectangle((4, 4, 12, 8), fill='blue')
+        image.save(self.source)
+        with Image.open(self.source) as saved:
+            self.assertEqual(saved.format, 'JPEG')
+            self.assertEqual(saved.size, (17, 13))
+            self.assertNotEqual(saved.getpixel((8, 6)), saved.getpixel((0, 0)))
+        destination = self.directory / 'exports'
+        destination.mkdir()
+        self.cli('-o', destination, '--source-background', 'white')
+        self.assertEqual({p.name for p in destination.iterdir()}, {'photo.png'})
+        with Image.open(destination / 'photo.png') as result:
+            self.assertEqual(result.format, 'PNG')
+
+    def test_output_directory_with_png_suffix_and_uppercase_input(self):
+        renamed = self.source.with_name('Logo.PNG')
+        self.source.rename(renamed)
+        self.source = renamed
+        destination = self.directory / 'exports.png'
+        destination.mkdir()
+        self.cli('-o', destination)
+        self.assertTrue((destination / 'Logo.PNG').is_file())
+
+    def test_output_directory_collision_and_overwrite(self):
+        destination = self.directory / 'exports'
+        destination.mkdir()
+        target = destination / self.source.name
+        target.write_bytes(b'keep existing output')
+        result = self.cli('-o', destination, success=False)
+        self.assertIn('output exists', result.stderr)
+        self.assertEqual(target.read_bytes(), b'keep existing output')
+        self.cli('-o', destination, '-O')
+        with Image.open(target) as result:
+            self.assertEqual(result.format, 'PNG')
+
+    def test_output_directory_protects_input(self):
+        original = self.source.read_bytes()
+        result = self.cli('-o', self.source.parent, '-O', success=False)
+        self.assertIn('output cannot replace the input or mask', result.stderr)
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_output_directory_preview_collision(self):
+        destination = self.directory / 'exports'
+        destination.mkdir()
+        preview = destination / 'logo-preview.png'
+        preview.write_bytes(b'keep preview')
+        result = self.cli('-o', destination, '--preview', success=False)
+        self.assertIn('output exists', result.stderr)
+        self.assertEqual(preview.read_bytes(), b'keep preview')
+        self.assertFalse((destination / 'logo.png').exists())
+
+    def test_explicit_output_filename(self):
+        destination = self.directory / 'custom.png'
+        self.cli('-o', destination)
+        self.assertTrue(destination.is_file())
+        self.assertFalse((self.directory / 'logo-circle.png').exists())
+
     def test_dependency_fallback_without_activation(self):
         # -S removes site packages; verify this really models missing Pillow.
         interpreter = sys._base_executable

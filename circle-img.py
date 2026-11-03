@@ -193,7 +193,9 @@ def save_png(image, path, info, overwrite):
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('-i', '--input', type=Path, required=True)
-    p.add_argument('-o', '--output', type=Path, help='default: INPUT-circle.png')
+    p.add_argument('-o', '--output', type=Path, metavar='FILE|DIR',
+                   help='PNG file or existing directory (keeps input name; non-PNG suffix becomes .png); '
+                        'default: INPUT-circle.png')
     p.add_argument('-b', '--background', default='white', help='color or transparent (default: white)')
     p.add_argument('--margin', type=int, default=0, help='minimum clearance from circle in pixels')
     group = p.add_mutually_exclusive_group()
@@ -216,6 +218,9 @@ def main(argv=None):
             raise ValueError('--tolerance cannot be combined with --mask')
         background = color(args.background)
         output = args.output or args.input.with_name(args.input.stem + '-circle.png')
+        if args.output is not None and args.output.is_dir():
+            filename = args.input.name if args.input.suffix.lower() == '.png' else args.input.stem + '.png'
+            output = args.output / filename
         if output.suffix.lower() != '.png':
             raise ValueError('output must have a .png extension for lossless encoding')
         destinations = [output]
