@@ -35,3 +35,16 @@ BORDER_CASES = (
     ('at threshold', 2, True),       # 38/40 = 95%
     ('above threshold', 1, True),    # 39/40 = 97.5%
 )
+
+# Exact solutions validate both the product and the independent exhaustive oracle.
+CIRCLE_CASES = (
+    ([(0, 0), (6, 0), (0, 8), (6, 8), (2, 3)], (3, 4, 5)),
+    ([(0, 0), (8, 0), (4, 8)], (4, 3, 5)),
+    ([(0, 0), (8, 0), (4, 1)], (4, 0, 4)),
+    ([(1, 2), (3, 2), (9, 2)], (5, 2, 4)),
+    ([(7, 9)], (7, 9, 0)),
+)
+CIRCLE_RANDOM_SEED = 812
+CIRCLE_RANDOM_CASES = 500
+CIRCLE_RANDOM_POINTS = 8
+CIRCLE_COORDINATE_LIMIT = 20

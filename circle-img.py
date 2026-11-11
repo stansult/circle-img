@@ -5,6 +5,7 @@ from collections import Counter, deque
 import math
 import os
 from pathlib import Path
+import random
 import shlex
 import sys
 import tempfile
@@ -133,6 +134,70 @@ def radius(extents, cx, cy):
                for y, left, right in extents)
 
 
+def convex_hull(points):
+    """Discard interior/collinear points; only hull vertices constrain a circle."""
+    points = sorted(set(points))
+
+    def cross(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def half(sequence):
+        result = []
+        for point in sequence:
+            while len(result) > 1 and cross(result[-2], result[-1], point) <= 0:
+                result.pop()
+            result.append(point)
+        return result
+
+    if len(points) <= 1:
+        return points
+    return half(points)[:-1] + half(reversed(points))[:-1]
+
+
+def enclosing_circle(points):
+    """Smallest continuous circle, using randomized incremental boundary points.
+
+    A local fixed seed gives repeatable results without changing global RNG state.
+    Integer pixel corners keep the orientation/determinant calculations exact.
+    """
+    points = convex_hull(points)
+    random.Random(0).shuffle(points)
+
+    def contains(circle, point):
+        cx, cy, r = circle
+        return math.hypot(point[0] - cx, point[1] - cy) <= r + 1e-9
+
+    def diameter(a, b):
+        return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2,
+                math.hypot(a[0] - b[0], a[1] - b[1]) / 2)
+
+    def through_three(a, b, c):
+        # Translate to a to avoid cancellation from large absolute coordinates.
+        bx, by = b[0] - a[0], b[1] - a[1]
+        cx, cy = c[0] - a[0], c[1] - a[1]
+        determinant = 2 * (bx * cy - by * cx)
+        if determinant == 0:
+            return max((diameter(a, b), diameter(a, c), diameter(b, c)), key=lambda circle: circle[2])
+        bb, cc = bx * bx + by * by, cx * cx + cy * cy
+        x = (cy * bb - by * cc) / determinant
+        y = (bx * cc - cx * bb) / determinant
+        return a[0] + x, a[1] + y, math.hypot(x, y)
+
+    circle = None
+    for i, a in enumerate(points):
+        if circle is not None and contains(circle, a):
+            continue
+        circle = (a[0], a[1], 0)
+        for j, b in enumerate(points[:i]):
+            if contains(circle, b):
+                continue
+            circle = diameter(a, b)
+            for c in points[:j]:
+                if not contains(circle, c):
+                    circle = through_three(a, b, c)
+    return circle
+
+
 def layout(artwork, margin):
     if margin < 0:
         raise ValueError('margin must be nonnegative')
@@ -142,11 +207,21 @@ def layout(artwork, margin):
     cropped = artwork.crop(box)
     w, h = cropped.size
     extents = row_extents(cropped.getchannel('A'))
-    side = max(*artwork.size, math.ceil(2 * (radius(extents, w / 2, h / 2) + margin)))
+    points = [(x, yy) for y, left, right in extents
+              for x in (left, right + 1) for yy in (y, y + 1)]
+    cx, cy, _ = enclosing_circle(points)
+    # Recompute against every occupied row, without the solver's float tolerance.
+    side = max(*artwork.size, math.ceil(2 * (radius(extents, cx, cy) + margin)))
     while True:
-        x, y = (side - w) // 2, (side - h) // 2
-        if radius(extents, side / 2 - x, side / 2 - y) + margin <= side / 2:
-            return cropped, side, (x, y)
+        # No fractional translation/resampling: try the four adjacent placements.
+        # Nearest integer placement needs at most two extra canvas pixels.
+        candidates = {(x, y) for x in (math.floor(side / 2 - cx), math.ceil(side / 2 - cx))
+                      for y in (math.floor(side / 2 - cy), math.ceil(side / 2 - cy))}
+        ranked = sorted((radius(extents, side / 2 - x, side / 2 - y), x, y)
+                        for x, y in candidates if 0 <= x <= side - w and 0 <= y <= side - h)
+        for r, x, y in ranked:
+            if r + margin <= side / 2:
+                return cropped, side, (x, y)
         side += 1
 
 

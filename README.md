@@ -99,17 +99,21 @@ photos, and gradients generally need a prepared mask. Empty foreground is an err
 
 ## Geometry and quality
 
-The script applies EXIF orientation, locates foreground bounds, centers them on a
-square canvas (within half a pixel), and measures the farthest **pixel corner**
-from that canvas's center. All foreground pixel areas must fit within the circle
-with the requested margin. Integer placement is checked before saving. The
-canvas is never smaller than the larger original dimension. Existing background
-padding can be redistributed to center the content; the artwork itself is never
-resized. Centering uses the bounding box, not visual mass or an optimized minimum
-enclosing circle.
+The script applies EXIF orientation and finds the smallest enclosing circle of
+the foreground's **pixel corners**. It centers that circle on a square canvas,
+allowing asymmetric artwork to shift away from bounding-box centering for a
+tighter fit. This is geometric fitting, not centering by visual mass.
+
+All foreground pixel areas must fit within the circle with the requested margin.
+The artwork itself is never resized. Placement uses whole pixels: the script
+checks the four placements surrounding the ideal position and enlarges the
+canvas if needed. This rounding can add up to two pixels to the ideal canvas
+side; it does not search every possible whole-pixel placement. The canvas is
+never smaller than the larger original dimension. Existing background padding
+can be redistributed.
 
 For a fixed center, required side length is at least `ceil(2 × (radius + margin))`;
-integer placement may require an additional pixel. A filled square needs more
+integer placement may require extra pixels. A filled square needs more
 padding than a circular silhouette. Margin zero provides geometric containment;
 use a positive margin for extra visual space or crop-rendering differences.
 
@@ -164,6 +168,19 @@ and ICC profiles. Reusable inputs and explicit boundary cases live in
 `tests/fixture_data.py`. These checks allow artwork placement to change while
 requiring its pixels to remain intact. Background-confidence cases cover below,
 at, and above the documented 95% threshold.
+
+`tests/test_optimized_geometry.py` checks a synthetic shield in four orientations,
+saved output, independently known enclosing circles, and fixture reproducibility.
+It also compares 500 repeatable point sets against an exhaustive test-only solver
+that checks every possible one-, two-, or three-point support circle using exact
+rational arithmetic. Known geometric solutions independently validate that solver.
+These checks run with the complete suite, including in GitHub Actions.
+The shield's broad shoulders and tapered base exercise tighter fitting without
+using company artwork. Rebuild it with:
+
+```bash
+.venv/bin/python tests/fixtures/generate_shield.py
+```
 
 Regression checks should be shown to fail under a narrow temporary fault before
 being accepted; restore the implementation and rerun the complete suite afterward.
