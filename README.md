@@ -155,9 +155,18 @@ The [Tests workflow](.github/workflows/tests.yml) can also be started manually.
 Tests use generated, explicitly checked fixtures and independently check every
 foreground pixel corner against the output circle. Coverage includes alpha and
 pixel preservation, circle geometry, margins, flood-fill boundaries, masks,
-metadata, file protection, CLI errors, and preview behavior. Regression checks
-should be shown to fail under a narrow temporary fault before being accepted;
-restore the implementation and rerun the complete suite afterward.
+metadata, file protection, CLI errors, and preview behavior.
+
+`tests/test_preservation.py` adds asymmetric multicolor artwork, mixed alpha,
+holes and disconnected marks, independently known tight canvas sizes, and
+end-to-end checks of saved PNG pixels, radial clearance, custom backgrounds,
+and ICC profiles. Reusable inputs and explicit boundary cases live in
+`tests/fixture_data.py`. These checks allow artwork placement to change while
+requiring its pixels to remain intact. Background-confidence cases cover below,
+at, and above the documented 95% threshold.
+
+Regression checks should be shown to fail under a narrow temporary fault before
+being accepted; restore the implementation and rerun the complete suite afterward.
 
 For visual verification with the AI-generated blue ribbon fixture under
 `tests/fixtures/` (also used by the CI direct-execution check):
