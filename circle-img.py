@@ -192,7 +192,8 @@ def save_png(image, path, info, overwrite):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('-i', '--input', type=Path, required=True)
+    p.add_argument('-i', '--input', type=Path, nargs='+', action='extend', required=True,
+                   metavar='FILE', help='one or more images; accepts shell-expanded wildcards; repeatable')
     p.add_argument('-o', '--output', type=Path, metavar='FILE|DIR',
                    help='PNG file or existing directory (keeps input name; non-PNG suffix becomes .png); '
                         'default: INPUT-circle.png')
@@ -208,54 +209,86 @@ def parser():
     return p
 
 
+def same_path(first, second):
+    return (first.resolve() == second.resolve() or
+            (first.exists() and second.exists() and os.path.samefile(first, second)))
+
+
+def plan_outputs(args):
+    """Reject destructive or ambiguous batch destinations before any writes."""
+    if len(args.input) > 1 and args.output is not None and not args.output.is_dir():
+        raise ValueError('multiple inputs require an existing output directory when using -o')
+    plans = []
+    claimed = []
+    protected = args.input + ([args.mask] if args.mask else [])
+    for source in args.input:
+        output = args.output or source.with_name(source.stem + '-circle.png')
+        if args.output is not None and args.output.is_dir():
+            filename = source.name if source.suffix.lower() == '.png' else source.stem + '.png'
+            output = args.output / filename
+        if output.suffix.lower() != '.png':
+            raise ValueError(f'{source}: output must have a .png extension for lossless encoding')
+        destinations = [output]
+        if args.preview:
+            destinations.append(output.with_name(output.stem + '-preview.png'))
+        for dest in destinations:
+            if any(same_path(dest, path) for path in protected):
+                raise ValueError(f'{source}: output cannot replace the input or mask: {dest}')
+            for previous, owner in claimed:
+                # Reject case-only differences too, for portable batch naming.
+                if str(dest.resolve()).casefold() == str(previous.resolve()).casefold() or same_path(dest, previous):
+                    raise ValueError(f'output collision: {source} and {owner} both target {dest}')
+            claimed.append((dest, source))
+        plans.append((source, destinations))
+    return plans
+
+
+def process_image(source, destinations, args, background):
+    output = destinations[0]
+    for dest in destinations:
+        if dest.exists() and not args.overwrite:
+            raise ValueError(f'output exists: {dest}; use --overwrite to replace it')
+        if not dest.parent.is_dir():
+            raise ValueError(f'output directory does not exist: {dest.parent}')
+    image, info = load_image(source)
+    mask = None
+    if args.mask:
+        with Image.open(args.mask) as supplied:
+            if supplied.mode not in ('1', 'L') or getattr(supplied, 'n_frames', 1) != 1:
+                raise ValueError('mask must be a single-frame grayscale image')
+            mask = ImageOps.exif_transpose(supplied).copy()
+    artwork, method = foreground(image, args.source_background, args.tolerance, mask)
+    result, layer, offset = render(artwork, background, args.margin)
+    save_png(result, output, info, args.overwrite)
+    print(f'Saved {output} ({result.width} × {result.height})')
+    if args.preview:
+        save_png(preview(result), destinations[1], info, args.overwrite)
+        print(f'Saved preview {destinations[1]}')
+    if args.verbose:
+        print(f'{source}: background: {method}; original: {image.width} × {image.height}; '
+              f'placement: {offset}; circular margin: {args.margin}px; no resampling')
+
+
 def main(argv=None):
-    p = parser()
-    args = p.parse_args(argv)
+    args = parser().parse_args(argv)
     try:
         if args.margin < 0 or not 0 <= args.tolerance <= 255:
             raise ValueError('margin must be nonnegative; tolerance must be between 0 and 255')
         if args.mask and args.tolerance:
             raise ValueError('--tolerance cannot be combined with --mask')
         background = color(args.background)
-        output = args.output or args.input.with_name(args.input.stem + '-circle.png')
-        if args.output is not None and args.output.is_dir():
-            filename = args.input.name if args.input.suffix.lower() == '.png' else args.input.stem + '.png'
-            output = args.output / filename
-        if output.suffix.lower() != '.png':
-            raise ValueError('output must have a .png extension for lossless encoding')
-        destinations = [output]
-        if args.preview:
-            destinations.append(output.with_name(output.stem + '-preview.png'))
-        protected = [args.input] + ([args.mask] if args.mask else [])
-        for dest in destinations:
-            if any(dest.resolve() == path.resolve() or
-                   (dest.exists() and path.exists() and os.path.samefile(dest, path)) for path in protected):
-                raise ValueError('output cannot replace the input or mask')
-            if dest.exists() and not args.overwrite:
-                raise ValueError(f'output exists: {dest}; use --overwrite to replace it')
-            if not dest.parent.is_dir():
-                raise ValueError(f'output directory does not exist: {dest.parent}')
-        image, info = load_image(args.input)
-        mask = None
-        if args.mask:
-            with Image.open(args.mask) as supplied:
-                if supplied.mode not in ('1', 'L') or getattr(supplied, 'n_frames', 1) != 1:
-                    raise ValueError('mask must be a single-frame grayscale image')
-                mask = ImageOps.exif_transpose(supplied).copy()
-        artwork, method = foreground(image, args.source_background, args.tolerance, mask)
-        result, layer, offset = render(artwork, background, args.margin)
-        save_png(result, output, info, args.overwrite)
-        print(f'Saved {output} ({result.width} × {result.height})')
-        if args.preview:
-            save_png(preview(result), destinations[1], info, args.overwrite)
-            print(f'Saved preview {destinations[1]}')
-        if args.verbose:
-            print(f'Background: {method}; original: {image.width} × {image.height}; '
-                  f'placement: {offset}; circular margin: {args.margin}px; no resampling')
-        return 0
-    except (ValueError, OSError, Image.DecompressionBombError) as exc:
+        plans = plan_outputs(args)
+    except (ValueError, OSError) as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 1
+    failed = False
+    for source, destinations in plans:
+        try:
+            process_image(source, destinations, args, background)
+        except (ValueError, OSError, Image.DecompressionBombError) as exc:
+            print(f'error: {source}: {exc}', file=sys.stderr)
+            failed = True
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':

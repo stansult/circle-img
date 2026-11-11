@@ -144,6 +144,102 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.returncode, 0 if success else 1, result.stdout + result.stderr)
         return result
 
+
+    def test_batch_directory_and_previews(self):
+        second = self.directory / 'second image.png'
+        fixture(rgba=(200, 10, 30, 255)).save(second)
+        destination = self.directory / 'exports'
+        destination.mkdir()
+        self.cli(second, '-o', destination, '--preview')
+        self.assertEqual({p.name for p in destination.iterdir()},
+                         {'logo.png', 'logo-preview.png', 'second image.png', 'second image-preview.png'})
+        with Image.open(destination / 'second image.png') as result:
+            self.assertEqual(result.getpixel((result.width // 2, result.height // 2)), (200, 10, 30, 255))
+
+    def test_batch_default_outputs_and_repeated_input(self):
+        second = self.directory / 'second.png'
+        fixture().save(second)
+        self.cli('-i', second)
+        self.assertTrue((self.directory / 'logo-circle.png').is_file())
+        self.assertTrue((self.directory / 'second-circle.png').is_file())
+
+    def test_batch_requires_directory_for_output(self):
+        second = self.directory / 'second.png'
+        fixture().save(second)
+        result = self.cli(second, '-o', self.directory / 'combined.png', success=False)
+        self.assertIn('multiple inputs require an existing output directory', result.stderr)
+        self.assertFalse((self.directory / 'combined.png').exists())
+        self.assertFalse((self.directory / 'logo-circle.png').exists())
+
+    def test_batch_continues_after_ambiguous_input(self):
+        bad = self.directory / 'ambiguous.png'
+        source = Image.new('RGBA', (5, 5), 'white')
+        ImageDraw.Draw(source).rectangle((0, 0, 2, 4), fill='blue')
+        self.assertEqual(source.getpixel((0, 0)), (0, 0, 255, 255))
+        self.assertEqual(source.getpixel((4, 0)), (255, 255, 255, 255))
+        source.save(bad)
+        original_good = self.source
+        self.source = bad
+        result = self.cli(original_good, success=False)
+        self.assertIn(str(bad), result.stderr)
+        self.assertIn('ambiguous background', result.stderr)
+        self.assertTrue((self.directory / 'logo-circle.png').is_file())
+        self.assertFalse((self.directory / 'ambiguous-circle.png').exists())
+
+    def test_batch_continues_after_existing_output_and_can_overwrite(self):
+        second = self.directory / 'second.png'
+        fixture().save(second)
+        target = self.directory / 'logo-circle.png'
+        target.write_bytes(b'keep')
+        result = self.cli(second, success=False)
+        self.assertIn(str(self.source), result.stderr)
+        self.assertEqual(target.read_bytes(), b'keep')
+        self.assertTrue((self.directory / 'second-circle.png').is_file())
+        self.cli(second, '-O')
+        with Image.open(target) as image:
+            self.assertEqual(image.format, 'PNG')
+
+    def test_batch_output_collisions_abort_before_writing(self):
+        folder = self.directory / 'other'
+        folder.mkdir()
+        second = folder / 'logo.png'
+        fixture().save(second)
+        destination = self.directory / 'exports'
+        destination.mkdir()
+        result = self.cli(second, '-o', destination, '-O', success=False)
+        self.assertIn('output collision', result.stderr)
+        self.assertEqual(list(destination.iterdir()), [])
+
+    def test_batch_preview_collision_aborts_before_writing(self):
+        second = self.directory / 'logo-preview.png'
+        fixture().save(second)
+        destination = self.directory / 'exports'
+        destination.mkdir()
+        result = self.cli(second, '-o', destination, '--preview', '-O', success=False)
+        self.assertIn('output collision', result.stderr)
+        self.assertEqual(list(destination.iterdir()), [])
+
+    def test_batch_protects_every_input_before_writing(self):
+        second = self.directory / 'logo-circle.png'
+        fixture().save(second)
+        before = second.read_bytes()
+        result = self.cli(second, '-O', success=False)
+        self.assertIn('output cannot replace the input or mask', result.stderr)
+        self.assertEqual(second.read_bytes(), before)
+        self.assertFalse((self.directory / 'logo-circle-circle.png').exists())
+
+    def test_batch_shell_glob(self):
+        second = self.directory / 'second image.png'
+        fixture().save(second)
+        destination = self.directory / 'exports'
+        destination.mkdir()
+        # The real shell expands the wildcard, keeping paths with spaces intact.
+        result = subprocess.run(['bash', '-c', '"$1" "$2" -i ./*.png -o exports',
+                                 'batch-test', sys.executable, str(ROOT / 'circle-img.py')],
+                                cwd=self.directory, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({p.name for p in destination.iterdir()}, {'logo.png', 'second image.png'})
+
     def test_default_and_preview(self):
         self.cli('--preview', '--margin', '3')
         with Image.open(self.directory / 'logo-circle.png') as output:

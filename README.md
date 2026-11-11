@@ -19,6 +19,8 @@ python3 -m venv .venv
 ```bash
 ./circle-img.py -i logo.png -o avatar.png --margin 12 --preview
 ./circle-img.py -i logo.png -o exports/  # existing folder: exports/logo.png
+./circle-img.py -i ~/Desktop/*.png -o ~/Desktop/circle -O  # folder must exist
+./circle-img.py -i first.png second.png --margin 12
 ./circle-img.py -i logo.png --background '#f5f5f5'
 ./circle-img.py -i logo.png --background transparent
 ./circle-img.py -i logo.jpg --source-background white --tolerance 10
@@ -34,17 +36,43 @@ The setup above is only needed once; nothing is installed automatically.
 
 | Option | Behavior |
 | --- | --- |
-| `-i`, `--input FILE` | One raster image; required. |
-| `-o`, `--output FILE\|DIR` | PNG file or existing directory. A directory keeps the input filename for PNG inputs; other extensions become `.png`. Default: `<input-stem>-circle.png` beside input. Parent must exist. |
+| `-i`, `--input FILE [FILE ...]` | One or more raster images; required. Accepts shell-expanded wildcards and repeated `-i`. |
+| `-o`, `--output FILE\|DIR` | PNG file or existing directory. A directory keeps the input filename for PNG inputs; other extensions become `.png`. Default: `<input-stem>-circle.png` beside each input. Multiple inputs require an existing directory when `-o` is supplied. Parent must exist. |
 | `-b`, `--background COLOR` | Destination background: `white` by default, a Pillow color name, hex color, or `transparent`. |
 | `--margin N` | Nonnegative integer minimum clearance from content to the **circle**, in output pixels; default 0. |
 | `--source-background COLOR` | Explicit opaque source background color; overrides alpha-based detection. |
 | `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 0. Applies to explicit or inferred source color. Cannot be used with a mask. |
-| `--mask FILE` | Single-frame grayscale mask matching oriented input dimensions: white retains, black removes, gray reduces original alpha proportionally. Exclusive with source background. |
+| `--mask FILE` | Single-frame grayscale mask matching oriented input dimensions: white retains, black removes, gray reduces original alpha proportionally. The same mask is applied to every input. Exclusive with source background. |
 | `--preview` | Also save `<output-stem>-preview.png`, a circular-crop preview with transparent corners. |
 | `-O`, `--overwrite` | Replace existing output/preview files; input and mask are always protected. |
 | `-v`, `--verbose` | Report detection method, dimensions, placement, and margin. |
 | `-h`, `--help` | Show CLI help. |
+
+## Multiple images
+
+The shell expands unquoted wildcards before running the script:
+
+```bash
+mkdir -p ~/Desktop/circle
+./circle-img.py -i ~/Desktop/*.png -o ~/Desktop/circle -O
+```
+
+Quote individual filenames containing spaces, but do not quote the wildcard.
+The script does not expand literal wildcard patterns. You can also list files
+explicitly or repeat `-i`. Inputs are processed in the supplied order.
+
+With multiple inputs, `-o` must be an existing directory or omitted. Without
+`-o`, each result is saved beside its input with the `-circle.png` suffix.
+All processing options apply to every input; a supplied mask must match each
+image's oriented dimensions. Errors identify the affected file, processing
+continues with the remaining files, and the command exits with status 1 if any
+image failed (0 when all succeed). Successful outputs are retained.
+
+Before processing starts, conflicting destination paths abort the whole batch,
+even with `-O`. This includes two inputs mapping to the same PNG name, duplicate
+inputs, preview/output collisions, and names differing only by case. No output
+may replace any input or the mask. Keep output files in a separate directory
+when using wildcards so later runs do not include previous results as inputs.
 
 ## Content and background rules
 
