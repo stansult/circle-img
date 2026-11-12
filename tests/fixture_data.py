@@ -48,3 +48,10 @@ CIRCLE_RANDOM_SEED = 812
 CIRCLE_RANDOM_CASES = 500
 CIRCLE_RANDOM_POINTS = 8
 CIRCLE_COORDINATE_LIMIT = 20
+
+# label, input canvas, disk origin, radial margin, expected output side.
+DISK_CASES = (
+    ('tight circle', (120, 120), (0, 0), 0, 120),
+    ('circle with margin', (120, 120), (0, 0), 7, 134),
+    ('off-center on larger canvas', (200, 160), (15, 5), 0, 200),
+)

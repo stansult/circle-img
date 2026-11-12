@@ -182,6 +182,15 @@ using company artwork. Rebuild it with:
 .venv/bin/python tests/fixtures/generate_shield.py
 ```
 
+`tests/test_circular_foreground.py` covers circular foreground content: tight
+fitting, radial margins, off-center input on a larger canvas, faint edge pixels,
+and saved PNG preservation. Its multicolor disk fixture has an independently
+verified 60-pixel enclosing radius. Rebuild it with:
+
+```bash
+.venv/bin/python tests/fixtures/generate_disk.py
+```
+
 Regression checks should be shown to fail under a narrow temporary fault before
 being accepted; restore the implementation and rerun the complete suite afterward.
 
