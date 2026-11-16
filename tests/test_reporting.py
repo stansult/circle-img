@@ -184,8 +184,7 @@ class ReportingTests(unittest.TestCase):
                     report,_,err,clock=reporter(verbose=verbose,terminal=not verbose)
                     with report.stage('Removing background','Removed background'):
                         clock.advance(duration)
-                    prefix='verbose: ' if verbose else ''
-                    self.assertTrue(err.getvalue().endswith(f'{prefix}Removed background{expected}\n'),err.getvalue())
+                    self.assertTrue(err.getvalue().endswith(f'Removed background{expected}\n'),err.getvalue())
                     report.finish()
 
     def test_monotonic_duration_when_wall_clock_moves_backward(self):
@@ -193,7 +192,7 @@ class ReportingTests(unittest.TestCase):
         with report.stage('Loading','Loaded'):
             clock.advance(18,wall_seconds=-60)
         report.finish()
-        self.assertIn('[14:06:03] verbose: Loaded (took 18.0s)',err.getvalue())
+        self.assertIn('[14:06:03] Loaded (took 18.0s)',err.getvalue())
         self.assertNotIn('\r',err.getvalue())
 
     def test_failure_and_interrupt_clear_progress_and_join_worker(self):
@@ -282,7 +281,7 @@ class ReportingCLITests(unittest.TestCase):
                 self.assertRegex(run.stdout,r'\[\d{2}:\d{2}:\d{2}\] processing:')
                 self.assertRegex(run.stdout,r'Saved .*\(256 × 256\); elapsed \d+\.\ds')
                 self.assertIn('Saved preview',run.stdout)
-                self.assertNotIn('verbose:',run.stdout)
+                self.assertNotIn('verbose:',run.stdout+run.stderr)
                 self.assertNotIn('\x1b',run.stdout+run.stderr)
                 self.assertNotIn('\r',run.stdout+run.stderr)
                 if flags:

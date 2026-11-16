@@ -64,7 +64,7 @@ class Reporter:
 
     def detail(self, text):
         if self.verbose:
-            self.message(f'verbose: {text}', diagnostic=True)
+            self.message(text, diagnostic=True)
 
     def _draw(self, action, started_at, started, frame):
         with self.lock:
@@ -99,7 +99,7 @@ class Reporter:
         stop = threading.Event()
         worker = None
         if self.verbose:
-            self.message(f'verbose: {action}', diagnostic=True, moment=started_at)
+            self.message(action, diagnostic=True, moment=started_at)
         if self.interactive:
             self._draw(action, started_at, started, 0)
             worker = threading.Thread(target=self._animate,
@@ -118,10 +118,9 @@ class Reporter:
             with self.lock:
                 self._clear()
             if self.interactive or self.verbose:
-                prefix = 'verbose: ' if self.verbose else ''
                 duration = max(0, self.monotonic()-started)
                 timing = f' (took {duration:.1f}s)' if duration >= self.DURATION_THRESHOLD else ''
-                self.message(f'{prefix}{outcome}{timing}', diagnostic=True)
+                self.message(f'{outcome}{timing}', diagnostic=True)
 
     def finish(self):
         with self.lock:

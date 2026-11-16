@@ -130,7 +130,8 @@ Use `-v` / `--verbose` for permanent diagnostics as processing happens:
 Verbose stderr reports resolved settings, file position in a batch, stage starts
 and completion times, each background layer's detection method and color, the
 selected output color, remaining content dimensions, final dimensions, placement,
-margin, and minimum size. Normal processing and saved-file messages stay on stdout.
+margin, and minimum size. Diagnostic lines start with the timestamp directly,
+without a `verbose:` label. Normal processing and saved-file messages stay on stdout.
 The initial date is written to whichever stream receives the first message.
 Reporting does not change output pixels. Errors identify the affected file when
 processing has begun. In an interactive terminal or verbose mode, failures also
