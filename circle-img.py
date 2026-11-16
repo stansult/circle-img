@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Prepare raster artwork for circular crops without resampling it."""
+"""Prepare raster or SVG artwork for circular crops; raster pixels are not resampled."""
 import argparse
 from collections import Counter, deque
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
 import math
+import io
 import os
 from pathlib import Path
 import random
@@ -154,8 +155,9 @@ def background_label(rgba):
 
 try:
     from PIL import Image, ImageColor, ImageDraw, ImageOps, ImageChops, PngImagePlugin
+    import resvg_py
 except ModuleNotFoundError as exc:
-    if exc.name != 'PIL' or __name__ != '__main__':
+    if exc.name not in ('PIL', 'resvg_py') or __name__ != '__main__':
         raise
     project = Path(__file__).resolve().parent
     environment = project / '.venv'
@@ -171,7 +173,8 @@ except ModuleNotFoundError as exc:
             reporter.finish()
             sys.exit(1)
     reporter = Reporter()
-    reporter.message('error: Pillow is not installed. Run the one-time setup:\n'
+    missing = 'Pillow' if exc.name == 'PIL' else 'resvg_py (SVG renderer)'
+    reporter.message(f'error: {missing} is not installed. Run the one-time setup:\n'
           f'  cd {shlex.quote(str(project))}\n'
           '  python3 -m venv .venv\n'
           '  .venv/bin/python -m pip install -r requirements.txt\n'
@@ -189,7 +192,38 @@ def color(value):
         raise ValueError(f'invalid color: {value}') from exc
 
 
+SVG_MIN_SIDE = 1024
+
+
+def load_svg(path):
+    """Render at intrinsic size, rerendering small vectors at the minimum size.
+
+    Let the SVG engine resolve viewBox, CSS units and aspect ratio. The first
+    render supplies dimensions only when a larger vector render is required;
+    its pixels are never upscaled. Explicit 96 dpi gives CSS physical units.
+    """
+    path = Path(path)
+    # Keep missing/unreadable files as ordinary filesystem errors.
+    with path.open('rb'):
+        pass
+    options = dict(svg_path=str(path), resources_dir=str(path.resolve().parent), dpi=96)
+    try:
+        data = resvg_py.svg_to_bytes(**options)
+        with Image.open(io.BytesIO(data)) as initial:
+            width, height = initial.size
+            if max(width, height) >= SVG_MIN_SIDE:
+                return initial.convert('RGBA'), {}
+        dimension = 'width' if width >= height else 'height'
+        data = resvg_py.svg_to_bytes(**options, **{dimension: SVG_MIN_SIDE})
+        with Image.open(io.BytesIO(data)) as rendered:
+            return rendered.convert('RGBA'), {}
+    except ValueError as exc:
+        raise ValueError(f'invalid SVG or unsupported SVG rendering: {exc}') from exc
+
+
 def load_image(path):
+    if Path(path).suffix.lower() == '.svg':
+        return load_svg(path)
     with Image.open(path) as source:
         if getattr(source, 'n_frames', 1) != 1:
             raise ValueError('animated or multi-frame inputs are not supported')
@@ -698,11 +732,12 @@ def parser(reporter=None):
     p = OperationalParser(
         description=__doc__, reporter=reporter,
         epilog=f'Output is a square lossless PNG; only --preview applies a circular crop. '
+               f'SVG inputs render at least {SVG_MIN_SIDE}px on the longer side, preserving proportions and larger sizes. '
                f'Interactive stderr shows progress, with elapsed time from {Reporter.ELAPSED_DELAY:g}s; '
                f'completion durations appear from {Reporter.DURATION_THRESHOLD:g}s. '
                'Redirected output has no animation. See README.md for detection limits and examples.')
     p.add_argument('-i', '--input', type=Path, nargs='+', action='extend', required=True,
-                   metavar='FILE', help='one or more images; accepts shell-expanded wildcards; repeatable')
+                   metavar='FILE', help='one or more raster or SVG images; accepts shell-expanded wildcards; repeatable')
     p.add_argument('-o', '--output', type=Path, metavar='FILE|DIR',
                    help='PNG file or existing directory (keeps input name; non-PNG suffix becomes .png); '
                         'default: <input-stem>-circle.png beside each input; multiple inputs require a directory or omitted -o')
@@ -714,7 +749,7 @@ def parser(reporter=None):
                    help='minimum output side in pixels; 0 disables the floor (default: 256); no artwork resizing')
     group = p.add_mutually_exclusive_group()
     group.add_argument('--source-background', metavar='COLOR', help='explicit opaque source color to remove from the border; overrides automatic detection; exclusive with --mask and --background-layers 2')
-    group.add_argument('--mask', type=Path, metavar='FILE', help='single-frame grayscale mask matching oriented input size; white retains, black removes, gray reduces original alpha; applies to every input')
+    group.add_argument('--mask', type=Path, metavar='FILE', help='single-frame grayscale mask matching oriented raster or rendered SVG size; white retains, black removes, gray reduces original alpha; applies to every input')
     p.add_argument('--tolerance', type=int, help='maximum per-channel background difference, 0–255; default 8 for automatic detection, otherwise 0; nonzero values cannot be combined with --mask')
     p.add_argument('--preview', action='store_true', help='also save <output-stem>-preview.png with a circular crop and transparent corners; main output stays square')
     p.add_argument('-O', '--overwrite', action='store_true', help='replace existing outputs (never the input or mask)')
@@ -773,7 +808,8 @@ def process_image(source, destinations, args, background, reporter):
                 if supplied.mode not in ('1', 'L') or getattr(supplied, 'n_frames', 1) != 1:
                     raise ValueError('mask must be a single-frame grayscale image')
                 mask = ImageOps.exif_transpose(supplied).copy()
-    reporter.detail(f'original: {image.width} × {image.height}; destination: {output}')
+    source_label = 'SVG rendered' if source.suffix.lower() == '.svg' else 'original'
+    reporter.detail(f'{source_label}: {image.width} × {image.height}; destination: {output}')
     if args.source_background is not None or mask is not None:
         action = ('Applying foreground mask', 'Applied foreground mask') if mask is not None else (
             'Removing selected background', 'Removed selected background')

@@ -8,7 +8,7 @@ PNG with enough space for a centered, inscribed circular crop.
 
 ## Install and run
 
-Requires Python 3.11+ and Pillow 13. From this folder:
+Requires Python 3.11+, Pillow 13, and resvg_py 0.5. From this folder:
 
 ```bash
 python3 -m venv .venv
@@ -17,6 +17,7 @@ python3 -m venv .venv
 ```
 
 ```bash
+./circle-img.py -i logo.svg -o avatar.png
 ./circle-img.py -i logo.png -o avatar.png --margin 12 --preview
 ./circle-img.py -i logo.png -o exports/  # existing folder: exports/logo.png
 ./circle-img.py -i ~/Desktop/*.png -o ~/Desktop/circle -O  # folder must exist
@@ -30,15 +31,18 @@ python3 -m venv .venv
 ```
 
 Run `./circle-img.py` directly; no environment activation is needed. If the
-current Python lacks Pillow, the script automatically uses `.venv/bin/python`
+current Python lacks Pillow or resvg_py, the script automatically uses `.venv/bin/python`
 beside the script, even when invoked from another directory or through a symlink.
-The setup above is only needed once; nothing is installed automatically.
+The setup above is only needed once; nothing is installed automatically. After
+updating from an older version, rerun `.venv/bin/python -m pip install -r requirements.txt`
+to install new dependencies. resvg_py provides prebuilt packages for supported
+macOS and Linux platforms; no separate Cairo installation is needed.
 
 ## Options
 
 | Option | Behavior |
 | --- | --- |
-| `-i`, `--input FILE [FILE ...]` | One or more raster images; required. Accepts shell-expanded wildcards and repeated `-i`. |
+| `-i`, `--input FILE [FILE ...]` | One or more raster or SVG images; required. Accepts shell-expanded wildcards and repeated `-i`. |
 | `-o`, `--output FILE\|DIR` | PNG file or existing directory. A directory keeps the input filename for PNG inputs; other extensions become `.png`. Default: `<input-stem>-circle.png` beside each input. Multiple inputs require an existing directory when `-o` is supplied. Parent must exist. |
 | `-b`, `--background COLOR` | When omitted: reuse the innermost excluded background color; transparency becomes white. With a mask, defaults to white. Override with a Pillow color name, hex color, or `transparent`. |
 | `--background-layers 1\|2` | Number of backgrounds to exclude, outside inward; default **1**. Use **2** for a colored circle/tile inside transparency or corner background. Cannot combine 2 with an explicit source background or mask. |
@@ -46,11 +50,33 @@ The setup above is only needed once; nothing is installed automatically.
 | `--margin N` | Nonnegative integer minimum clearance from content to the **circle**, in output pixels; default 0. |
 | `--source-background COLOR` | Explicit opaque source background color; overrides automatic detection. |
 | `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 8 for automatic detection, otherwise 0. Applies to explicit or inferred source color. Only 0 is allowed with a mask. |
-| `--mask FILE` | Single-frame grayscale mask matching oriented input dimensions: white retains, black removes, gray reduces original alpha proportionally. The same mask is applied to every input. Exclusive with source background. |
+| `--mask FILE` | Single-frame grayscale mask matching oriented raster or rendered SVG dimensions: white retains, black removes, gray reduces original alpha proportionally. The same mask is applied to every input. Exclusive with source background. |
 | `--preview` | Also save `<output-stem>-preview.png`, a circular-crop preview with transparent corners. |
 | `-O`, `--overwrite` | Replace existing output/preview files; input and mask are always protected. |
 | `-v`, `--verbose` | Timestamped settings, batch position, detection details, colors, geometry, and stage timings on stderr. |
 | `-h`, `--help` | Show CLI help. |
+
+## SVG inputs
+
+Files with a `.svg` extension (case-insensitive) are rendered to RGBA using
+[resvg_py](https://resvg-py.readthedocs.io/en/latest/). The longer side is at least
+**1024 pixels**; larger declared dimensions are preserved. Proportions and
+transparency are preserved. Dimensions come from the SVG renderer, including
+`viewBox`-only files and physical units at 96 dpi. Small SVGs are rendered again
+from vectors at the target resolution, never enlarged from a small bitmap.
+
+The resulting pixels use the same background layers, circle fitting, margins,
+and PNG output as raster inputs. `--min-size` still controls the final square
+canvas, not SVG rendering resolution. Removing backgrounds may produce a final
+image smaller than 1024 pixels. Masks must match the rendered SVG dimensions;
+`-v` reports these as `SVG rendered`.
+
+SVG is converted to a static raster image, not preserved as vector output.
+Rendering follows resvg's supported SVG features, not a browser: scripts and
+animation are not run. Fonts must be available locally (convert text to paths
+for portable artwork); relative image references resolve beside the SVG.
+For predictable results, use self-contained SVGs with outlined text. Embedded
+raster images do not gain detail from rendering at a larger size.
 
 ## Multiple images
 
@@ -68,7 +94,7 @@ explicitly or repeat `-i`. Inputs are processed in the supplied order.
 With multiple inputs, `-o` must be an existing directory or omitted. Without
 `-o`, each result is saved beside its input with the `-circle.png` suffix.
 All processing options apply to every input; a supplied mask must match each
-image's oriented dimensions. Errors identify the affected file, processing
+image's oriented raster or rendered SVG dimensions. Errors identify the affected file, processing
 continues with the remaining files, and the command exits with status 1 if any
 image failed (0 when all succeed). Invalid command syntax exits with status 2;
 interruption exits with status 130. Successful outputs are retained.
@@ -233,7 +259,7 @@ allowing asymmetric artwork to shift away from bounding-box centering for a
 tighter fit. This is geometric fitting, not centering by visual mass.
 
 All foreground pixel areas must fit within the circle with the requested margin.
-The artwork itself is never resized. Placement uses whole pixels: the script
+Raster artwork is never resized; SVG artwork is rasterized first as described above. Placement uses whole pixels: the script
 checks the four placements surrounding the ideal position and enlarges the
 canvas if needed. This rounding can add up to two pixels to the ideal canvas
 side; it does not search every possible whole-pixel placement.
@@ -251,7 +277,7 @@ integer placement may require extra pixels. A filled square needs more
 padding than a circular silhouette. Margin zero provides geometric containment;
 use a positive margin for extra visual space or crop-rendering differences.
 
-Output uses lossless PNG. Transparent output preserves foreground RGBA values;
+Output uses lossless PNG after any SVG rasterization. Transparent output preserves foreground RGBA values;
 colored output deliberately alpha-composites edge pixels over the new color.
 ICC profiles, PNG sRGB/gamma markers, and resolution metadata are retained when
 present. EXIF is not copied after orientation. Standard 8-bit RGB, RGBA,
@@ -357,6 +383,12 @@ passes. These optimizations preserve the detection thresholds and pixel values;
 they do not resize the image or require additional dependencies. When changing
 this path, compare both foreground masks and saved output with the previous
 implementation, and measure full-command timing separately from profiler timings.
+
+`tests/test_svg.py` independently checks the synthetic `layered-vector.svg`
+fixture and renderer, minimum and larger dimensions, aspect ratios, physical
+units, transparency, direct vector rendering, background layers, mixed-format
+batches, preview output, and invalid SVG errors. These tests run in the full
+suite and GitHub Actions. No company artwork is included.
 
 `tests/test_min_size.py` checks the 256-pixel default, custom and disabled floors,
 large padded inputs, artwork or margins exceeding the floor, exact pixel
