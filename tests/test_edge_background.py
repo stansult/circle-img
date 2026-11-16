@@ -1,4 +1,4 @@
-"""Edge-background mode must isolate artwork without flooding through it."""
+"""Internal edge detection must isolate artwork without flooding through it."""
 import importlib.util
 import math
 from pathlib import Path
@@ -61,7 +61,7 @@ class EdgeBackgroundTests(unittest.TestCase):
         for label, options in EDGE_TILE_CASES:
             with self.subTest(case=label):
                 source = fixture.make_tile(**options)
-                art, _ = app.foreground(source, 'edge', 8)
+                art, _, _ = app.edge_foreground(source, 8)
                 expected = self.expected_artwork(source)
                 self.assertEqual(art.getchannel('A').tobytes(), expected.getchannel('A').tobytes())
                 self.assertEqual(art.crop((24,24,56,56)).tobytes(), expected.crop((24,24,56,56)).tobytes())
@@ -86,11 +86,11 @@ class EdgeBackgroundTests(unittest.TestCase):
                               ('small edge artwork',edge_mark),('different corner color',different_corner)):
             with self.subTest(case=label):
                 with self.assertRaisesRegex(ValueError, 'ambiguous edge background'):
-                    app.foreground(source,'edge',8)
+                    app.edge_foreground(source,8)
 
     def test_radial_margin_and_pixel_preservation(self):
         source = fixture.make_tile()
-        artwork, _ = app.foreground(source,'edge',8)
+        artwork, _, _ = app.edge_foreground(source,8)
         result, layer, _ = app.render(artwork,(0,0,0,0),30,min_size=0)
         # 32x32 square support: ceil(sqrt(32**2+32**2) + 2*30) = 106.
         self.assertEqual(result.size,(106,106))
@@ -104,8 +104,8 @@ class EdgeBackgroundTests(unittest.TestCase):
     def test_explicit_tolerance_is_honored(self):
         source = fixture.make_tile(noise=True)
         with self.assertRaisesRegex(ValueError,'ambiguous edge background'):
-            app.foreground(source,'edge',0)
-        art,_ = app.foreground(source,'edge',8)
+            app.edge_foreground(source,0)
+        art,_,_ = app.edge_foreground(source,8)
         self.assertEqual(art.getchannel('A').tobytes(),self.expected_artwork(source).getchannel('A').tobytes())
 
     def test_default_detection_unchanged(self):
@@ -128,7 +128,7 @@ class EdgeBackgroundTests(unittest.TestCase):
                 source = folder/(name+'.png')
                 fixture.make_tile(background=bg).save(source)
                 sources.append(source)
-            run = self.cli('-i',*sources,'-o',destination,'--source-background','edge','-b','auto','--preview','--min-size','80')
+            run = self.cli('-i',*sources,'-o',destination,'--background-layers','2','--preview','--min-size','80')
             self.assertEqual(run.returncode,0,run.stderr)
             for source,bg in zip(sources,((30,130,150),(120,60,140))):
                 with Image.open(destination/source.name) as image:
@@ -137,15 +137,15 @@ class EdgeBackgroundTests(unittest.TestCase):
                     self.assertEqual(image.crop((24,24,56,56)).tobytes(),fixture.make_tile(background=bg).crop((24,24,56,56)).tobytes())
                 self.assertTrue((destination/(source.stem+'-preview.png')).exists())
             for bg in ('transparent','#123456'):
-                run=self.cli('-i',sources[0],'-o',destination,'--source-background','edge','-b',bg,'-O','--min-size','80')
+                run=self.cli('-i',sources[0],'-o',destination,'--background-layers','2','-b',bg,'-O','--min-size','80')
                 self.assertEqual(run.returncode,0,run.stderr)
                 with Image.open(destination/sources[0].name) as image:
                     self.assertEqual(image.getpixel((0,0)),app.color(bg))
 
-    def test_auto_supports_default_layer_detection(self):
+    def test_default_output_color_and_layer_detection(self):
         with tempfile.TemporaryDirectory() as directory:
             target=Path(directory)/'out.png'
-            run=self.cli('-i',ROOT/'tests/fixtures/rounded-tile.png','-o',target,'-b','auto')
+            run=self.cli('-i',ROOT/'tests/fixtures/rounded-tile.png','-o',target)
             self.assertEqual(run.returncode,0,run.stderr)
             with Image.open(target) as output:
                 self.assertEqual(output.getpixel((0,0)), fixture.CORNER+(255,))

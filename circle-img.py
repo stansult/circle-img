@@ -2,13 +2,156 @@
 """Prepare raster artwork for circular crops without resampling it."""
 import argparse
 from collections import Counter, deque
+from contextlib import contextmanager, nullcontext
+from datetime import datetime
 import math
 import os
 from pathlib import Path
 import random
 import shlex
+import shutil
 import sys
 import tempfile
+import threading
+import time
+
+
+class Reporter:
+    """Timestamped CLI messages; animation lives only on an interactive stderr.
+
+    Wall time identifies events. Monotonic time measures durations, independent
+    of clock adjustments. A worker updates only the display, never image data.
+    """
+    ELAPSED_DELAY = 5.0
+    DURATION_THRESHOLD = 10.0
+
+    def __init__(self, verbose=False, stdout=None, stderr=None, now=None, monotonic=None):
+        self.verbose = verbose
+        self.stdout = sys.stdout if stdout is None else stdout
+        self.stderr = sys.stderr if stderr is None else stderr
+        self.now = now or datetime.now
+        self.monotonic = monotonic or time.monotonic
+        self.interactive = self.stderr.isatty() and os.environ.get('TERM') != 'dumb'
+        self.start_date = None
+        self.last_stream = self.stderr
+        self.lock = threading.RLock()
+        self.line_visible = False
+
+    def _clear(self):
+        if self.line_visible:
+            self.stderr.write('\r\033[2K')
+            self.stderr.flush()
+            self.line_visible = False
+
+    def _begin(self, stream, moment):
+        if self.start_date is None:
+            self.start_date = moment.date()
+            print(f'[{self.start_date}]', file=stream, flush=True)
+        self.last_stream = stream
+
+    def message(self, text, *, diagnostic=False, moment=None):
+        stream = self.stderr if diagnostic else self.stdout
+        with self.lock:
+            self._clear()
+            moment = moment or self.now()
+            self._begin(stream, moment)
+            prefixed = False
+            for line in str(text).split('\n'):
+                if line and not prefixed:
+                    line = f'[{moment:%H:%M:%S}] {line}'
+                    prefixed = True
+                print(line, file=stream, flush=True)
+
+    def detail(self, text):
+        if self.verbose:
+            self.message(f'verbose: {text}', diagnostic=True)
+
+    def _draw(self, action, started_at, started, frame):
+        with self.lock:
+            prefix = f'[{started_at:%H:%M:%S}] '
+            duration = max(0, self.monotonic()-started)
+            elapsed = f" elapsed {int(duration)}s" if duration >= self.ELAPSED_DELAY else ""
+            suffix = f'...{elapsed} {"|/-"[frame % 3]}'
+            # Keep both clocks visible without wrapping a long stage label.
+            try:
+                columns = os.get_terminal_size(self.stderr.fileno()).columns or 100
+            except (AttributeError, OSError, ValueError):
+                columns = shutil.get_terminal_size(fallback=(100, 24)).columns
+            available = columns-1-len(prefix)-len(suffix)
+            if available < 1:
+                self._clear()
+                return
+            self._begin(self.stderr, started_at)
+            label = action if len(action) <= available else action[:max(0,available-1)]+'…'
+            self.stderr.write('\r\033[2K'+prefix+label+suffix)
+            self.stderr.flush()
+            self.line_visible = True
+
+    def _animate(self, stop, action, started_at, started):
+        frame = 1
+        while not stop.wait(.2):
+            self._draw(action, started_at, started, frame)
+            frame += 1
+
+    @contextmanager
+    def stage(self, action, completed):
+        started_at, started = self.now(), self.monotonic()
+        stop = threading.Event()
+        worker = None
+        if self.verbose:
+            self.message(f'verbose: {action}', diagnostic=True, moment=started_at)
+        if self.interactive:
+            self._draw(action, started_at, started, 0)
+            worker = threading.Thread(target=self._animate,
+                                      args=(stop,action,started_at,started), daemon=True)
+            worker.start()
+        outcome = completed
+        try:
+            yield
+        except BaseException as exc:
+            outcome = f'{"Interrupted" if isinstance(exc, KeyboardInterrupt) else "Failed"}: {action}'
+            raise
+        finally:
+            stop.set()
+            if worker is not None:
+                worker.join()
+            with self.lock:
+                self._clear()
+            if self.interactive or self.verbose:
+                prefix = 'verbose: ' if self.verbose else ''
+                duration = max(0, self.monotonic()-started)
+                timing = f' (took {duration:.1f}s)' if duration >= self.DURATION_THRESHOLD else ''
+                self.message(f'{prefix}{outcome}{timing}', diagnostic=True)
+
+    def finish(self):
+        with self.lock:
+            self._clear()
+            if self.start_date is not None:
+                end_date = self.now().date()
+                if end_date != self.start_date:
+                    print(f'[{end_date}]', file=self.last_stream, flush=True)
+                self.start_date = None
+
+
+class OperationalParser(argparse.ArgumentParser):
+    def __init__(self, *args, reporter=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reporter = reporter
+
+    def error(self, message):
+        if self.reporter is None:
+            return super().error(message)
+        self.print_usage(sys.stderr)
+        self.reporter.message(f'error: {message}', diagnostic=True)
+        raise SystemExit(2)
+
+
+def background_label(rgba):
+    if rgba[3] == 0:
+        return 'transparent'
+    channels = rgba[:3] if rgba[3] == 255 else rgba
+    return '#'+''.join(f'{channel:02X}' for channel in channels)
+
 
 try:
     from PIL import Image, ImageColor, ImageDraw, ImageOps, ImageFilter, PngImagePlugin
@@ -24,13 +167,17 @@ except ModuleNotFoundError as exc:
         try:
             os.execv(str(python), [str(python), str(Path(__file__).resolve()), *sys.argv[1:]])
         except OSError as launch_error:
-            print(f'error: could not start project Python: {launch_error}', file=sys.stderr)
+            reporter = Reporter()
+            reporter.message(f'error: could not start project Python: {launch_error}', diagnostic=True)
+            reporter.finish()
             sys.exit(1)
-    print('error: Pillow is not installed. Run the one-time setup:\n'
+    reporter = Reporter()
+    reporter.message('error: Pillow is not installed. Run the one-time setup:\n'
           f'  cd {shlex.quote(str(project))}\n'
           '  python3 -m venv .venv\n'
           '  .venv/bin/python -m pip install -r requirements.txt\n'
-          'Then run ./circle-img.py normally; activation is unnecessary.', file=sys.stderr)
+          'Then run ./circle-img.py normally; activation is unnecessary.', diagnostic=True)
+    reporter.finish()
     sys.exit(1)
 
 
@@ -68,9 +215,6 @@ def foreground(image, source_background=None, tolerance=0, mask=None):
         from PIL import ImageChops
         result.putalpha(ImageChops.multiply(image.getchannel('A'), mask.convert('L')))
         return result, 'supplied mask'
-    if source_background == 'edge':
-        artwork, _, method = edge_foreground(image, tolerance)
-        return artwork, method
     if source_background is None and image.getchannel('A').getextrema()[0] < 255:
         return result, 'existing alpha'
     w, h = image.size
@@ -306,10 +450,8 @@ def inner_background(image, tolerance):
     return result, candidate+(255,), f'visible-boundary RGB {candidate}, tolerance {tolerance}'
 
 
-def layered_foreground(image, layers=1, tolerance=8):
-    """Exclude one or two outside-in backgrounds and return the output color."""
-    if layers not in (1,2):
-        raise ValueError('background-layers must be 1 or 2')
+def outer_background(image, tolerance):
+    """Identify the outermost background without changing image geometry."""
     if image.getchannel('A').getextrema()[0] < 255:
         artwork, background, method = image.copy(), (255,255,255,255), 'existing alpha (transparent background becomes white)'
     else:
@@ -326,9 +468,23 @@ def layered_foreground(image, layers=1, tolerance=8):
             border = [pixels[x,y][:3] for y in (0,h-1) for x in range(w)]
             border += [pixels[x,y][:3] for x in (0,w-1) for y in range(1,h-1)]
             background = Counter(border).most_common(1)[0][0]+(255,)
+    return artwork, background, method
+
+
+def layered_foreground(image, layers=1, tolerance=8, reporter=None):
+    """Exclude one or two outside-in backgrounds and return the output color."""
+    if layers not in (1,2):
+        raise ValueError('background-layers must be 1 or 2')
+    with reporter.stage('Removing background layer 1', 'Removed background layer 1') if reporter else nullcontext():
+        artwork, background, method = outer_background(image, tolerance)
+    if reporter:
+        reporter.detail(f'layer 1: {method}; output color {background_label(background)}')
     if layers == 2:
-        artwork, background, inner_method = inner_background(artwork,tolerance)
+        with reporter.stage('Removing background layer 2', 'Removed background layer 2') if reporter else nullcontext():
+            artwork, background, inner_method = inner_background(artwork,tolerance)
         method += '; layer 2: '+inner_method
+        if reporter:
+            reporter.detail(f'layer 2: {inner_method}; output color {background_label(background)}')
     return artwork, background, method
 
 
@@ -484,26 +640,27 @@ def save_png(image, path, info, overwrite):
             os.unlink(temporary)
 
 
-def parser():
-    p = argparse.ArgumentParser(description=__doc__)
+def parser(reporter=None):
+    p = OperationalParser(description=__doc__, reporter=reporter)
     p.add_argument('-i', '--input', type=Path, nargs='+', action='extend', required=True,
                    metavar='FILE', help='one or more images; accepts shell-expanded wildcards; repeatable')
     p.add_argument('-o', '--output', type=Path, metavar='FILE|DIR',
                    help='PNG file or existing directory (keeps input name; non-PNG suffix becomes .png); '
                         'default: INPUT-circle.png')
-    p.add_argument('-b', '--background', default='auto', help='color, transparent, or auto (default): reuse excluded background; transparency becomes white')
+    p.add_argument('-b', '--background', help='output color or transparent; when omitted, reuse excluded background; transparency becomes white')
     p.add_argument('--background-layers', type=int, choices=(1, 2), default=1,
                    help='backgrounds to exclude, outside inward (default: 1); 2 also excludes an inner flat tile or circle')
     p.add_argument('--margin', type=int, default=0, help='minimum clearance from circle in pixels')
     p.add_argument('--min-size', type=int, default=256,
                    help='minimum output side in pixels; 0 disables the floor (default: 256); no artwork resizing')
     group = p.add_mutually_exclusive_group()
-    group.add_argument('--source-background', help='opaque source background color, or edge for flat tiles with matching corners')
+    group.add_argument('--source-background', help='explicit opaque source background color; overrides automatic detection')
     group.add_argument('--mask', type=Path, help='grayscale foreground mask; white retains, black removes')
-    p.add_argument('--tolerance', type=int, help='maximum per-channel background difference, 0–255; default 8 for automatic/edge detection, otherwise 0')
+    p.add_argument('--tolerance', type=int, help='maximum per-channel background difference, 0–255; default 8 for automatic detection, otherwise 0')
     p.add_argument('--preview', action='store_true', help='also save OUTPUT-stem-preview.png with circular crop')
     p.add_argument('-O', '--overwrite', action='store_true', help='replace existing outputs (never the input or mask)')
-    p.add_argument('-v', '--verbose', action='store_true')
+    p.add_argument('-v', '--verbose', action='store_true',
+                   help='timestamped settings, stages, detected colors, geometry, and timings on stderr')
     return p
 
 
@@ -541,69 +698,98 @@ def plan_outputs(args):
     return plans
 
 
-def process_image(source, destinations, args, background):
+def process_image(source, destinations, args, background, reporter):
+    started = reporter.monotonic()
     output = destinations[0]
     for dest in destinations:
         if dest.exists() and not args.overwrite:
             raise ValueError(f'output exists: {dest}; use --overwrite to replace it')
         if not dest.parent.is_dir():
             raise ValueError(f'output directory does not exist: {dest.parent}')
-    image, info = load_image(source)
-    mask = None
-    if args.mask:
-        with Image.open(args.mask) as supplied:
-            if supplied.mode not in ('1', 'L') or getattr(supplied, 'n_frames', 1) != 1:
-                raise ValueError('mask must be a single-frame grayscale image')
-            mask = ImageOps.exif_transpose(supplied).copy()
-    if args.source_background == 'edge':
-        artwork, detected_background, method = edge_foreground(image, args.tolerance)
-    elif args.source_background is not None or mask is not None:
-        artwork, method = foreground(image, args.source_background, args.tolerance, mask)
-        detected_background = color(args.source_background) if args.source_background else (255,255,255,255)
+    with reporter.stage('Loading image', 'Loaded image'):
+        image, info = load_image(source)
+        mask = None
+        if args.mask:
+            with Image.open(args.mask) as supplied:
+                if supplied.mode not in ('1', 'L') or getattr(supplied, 'n_frames', 1) != 1:
+                    raise ValueError('mask must be a single-frame grayscale image')
+                mask = ImageOps.exif_transpose(supplied).copy()
+    reporter.detail(f'original: {image.width} × {image.height}; destination: {output}')
+    if args.source_background is not None or mask is not None:
+        action = ('Applying foreground mask', 'Applied foreground mask') if mask is not None else (
+            'Removing selected background', 'Removed selected background')
+        with reporter.stage(*action):
+            artwork, method = foreground(image, args.source_background, args.tolerance, mask)
+            detected_background = color(args.source_background) if args.source_background else (255,255,255,255)
+        reporter.detail(f'background: {method}')
     else:
-        artwork, detected_background, method = layered_foreground(image, args.background_layers, args.tolerance)
-    if background is None:
+        artwork, detected_background, method = layered_foreground(
+            image, args.background_layers, args.tolerance, reporter=reporter)
+    automatic = background is None
+    if automatic:
         background = detected_background
-    result, layer, offset = render(artwork, background, args.margin, args.min_size)
-    save_png(result, output, info, args.overwrite)
-    print(f'Saved {output} ({result.width} × {result.height})')
+    reporter.detail(f'output background: {background_label(background)} ({"automatic" if automatic else "explicit"})')
+    if reporter.verbose:
+        box = artwork.getchannel('A').getbbox()
+        if box is not None:
+            reporter.detail(f'remaining content: {box[2]-box[0]} × {box[3]-box[1]}; bounds: {box}')
+    with reporter.stage('Fitting content within circle', 'Fitted content within circle'):
+        result, layer, offset = render(artwork, background, args.margin, args.min_size)
+    reporter.detail(f'output: {result.width} × {result.height}; placement: {offset}; '
+                    f'circular margin: {args.margin}px; minimum side: {args.min_size}px; no resampling')
+    with reporter.stage('Saving PNG', 'Saved PNG'):
+        save_png(result, output, info, args.overwrite)
+    reporter.message(f'Saved {output} ({result.width} × {result.height}); '
+                     f'elapsed {reporter.monotonic()-started:.1f}s')
     if args.preview:
-        save_png(preview(result), destinations[1], info, args.overwrite)
-        print(f'Saved preview {destinations[1]}')
-    if args.verbose:
-        print(f'{source}: background: {method}; original: {image.width} × {image.height}; '
-              f'placement: {offset}; circular margin: {args.margin}px; minimum side: {args.min_size}px; no resampling')
+        with reporter.stage('Creating and saving preview', 'Created and saved preview'):
+            save_png(preview(result), destinations[1], info, args.overwrite)
+        reporter.message(f'Saved preview {destinations[1]}; elapsed {reporter.monotonic()-started:.1f}s')
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    reporter = Reporter()
     try:
-        if args.min_size < 0:
-            raise ValueError('min-size must be nonnegative')
-        if args.tolerance is None:
-            args.tolerance = 8 if not args.mask and args.source_background in (None, 'edge') else 0
-        if args.margin < 0 or not 0 <= args.tolerance <= 255:
-            raise ValueError('margin must be nonnegative; tolerance must be between 0 and 255')
-        if args.mask and args.tolerance:
-            raise ValueError('--tolerance cannot be combined with --mask')
-        if args.background_layers != 1 and (args.source_background or args.mask):
-            raise ValueError('--background-layers 2 cannot be combined with --source-background or --mask')
-        if args.background.lower() == 'auto':
-            background = None
-        else:
-            background = color(args.background)
-        plans = plan_outputs(args)
-    except (ValueError, OSError) as exc:
-        print(f'error: {exc}', file=sys.stderr)
-        return 1
-    failed = False
-    for source, destinations in plans:
+        args = parser(reporter).parse_args(argv)
+        reporter.verbose = args.verbose
         try:
-            process_image(source, destinations, args, background)
-        except (ValueError, OSError, Image.DecompressionBombError) as exc:
-            print(f'error: {source}: {exc}', file=sys.stderr)
-            failed = True
-    return 1 if failed else 0
+            if args.min_size < 0:
+                raise ValueError('min-size must be nonnegative')
+            if args.tolerance is None:
+                args.tolerance = 8 if not args.mask and args.source_background is None else 0
+            if args.margin < 0 or not 0 <= args.tolerance <= 255:
+                raise ValueError('margin must be nonnegative; tolerance must be between 0 and 255')
+            if args.mask and args.tolerance:
+                raise ValueError('--tolerance cannot be combined with --mask')
+            if args.background_layers != 1 and (args.source_background or args.mask):
+                raise ValueError('--background-layers 2 cannot be combined with --source-background or --mask')
+            if args.source_background is not None and color(args.source_background)[3] != 255:
+                raise ValueError('source background must be opaque')
+            background = None if args.background is None else color(args.background)
+            plans = plan_outputs(args)
+        except (ValueError, OSError) as exc:
+            reporter.message(f'error: {exc}', diagnostic=True)
+            return 1
+        detection = f'mask {args.mask}' if args.mask else (
+            f'source background {args.source_background}' if args.source_background else f'{args.background_layers} background layer(s)')
+        reporter.detail(f'settings: {detection}; tolerance {args.tolerance}; output background {args.background if args.background is not None else "automatic"}; '
+                        f'margin {args.margin}px; minimum side {args.min_size}px; '
+                        f'preview {"on" if args.preview else "off"}; overwrite {"on" if args.overwrite else "off"}')
+        failed = False
+        for index, (source, destinations) in enumerate(plans, 1):
+            reporter.message(f'processing: {source}')
+            reporter.detail(f'file {index} of {len(plans)}')
+            try:
+                process_image(source, destinations, args, background, reporter)
+            except (ValueError, OSError, Image.DecompressionBombError) as exc:
+                reporter.message(f'error: {source}: {exc}', diagnostic=True)
+                failed = True
+        return 1 if failed else 0
+    except KeyboardInterrupt:
+        reporter.message('error: interrupted', diagnostic=True)
+        return 130
+    finally:
+        reporter.finish()
 
 
 if __name__ == '__main__':

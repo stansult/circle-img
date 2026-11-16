@@ -136,12 +136,25 @@ class BackgroundLayersTests(unittest.TestCase):
                 self.assertCountEqual(pixels,expected)
                 self.assertLess(output.width,56)
 
+    def test_removed_background_choices_rejected_before_batch_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder=Path(directory); source=folder/'source.png'
+            fixture.make_tile().save(source)
+            for option,value in (('--background','auto'),('--source-background','edge')):
+                with self.subTest(option=option):
+                    destination=folder/value; destination.mkdir()
+                    run=self.cli('-i',source,'-o',destination,option,value)
+                    self.assertNotEqual(run.returncode,0)
+                    self.assertIn('invalid color: '+value,run.stderr)
+                    self.assertNotIn('processing:',run.stdout)
+                    self.assertEqual(list(destination.iterdir()),[])
+
     def test_advanced_options_and_invalid_combinations(self):
         with tempfile.TemporaryDirectory() as directory:
             folder=Path(directory); source=folder/'source.png'; output=folder/'out.png'; mask=folder/'mask.png'
             fixture.make_tile(rounded=False).save(source)
             Image.new('L',(80,80),255).save(mask)
-            for options in (['--mask',mask],['--source-background','#1e8296'],['--source-background','edge']):
+            for options in (['--mask',mask],['--source-background','#1e8296']):
                 run=self.cli('-i',source,'-o',output,'--background-layers','2',*options)
                 self.assertNotEqual(run.returncode,0)
                 self.assertIn('cannot be combined',run.stderr)
