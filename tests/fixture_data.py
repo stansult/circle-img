@@ -75,3 +75,18 @@ MIN_SIZE_CASES = (
     ('artwork exceeds minimum', (400, 500), (20, 30, 320, 430), 0, None, 500),
     ('margin exceeds minimum', (20, 20), (4, 5, 10, 13), 125, None, 260),
 )
+
+# Binary masks for optimized four-neighbor border fill: holes, diagonals,
+# disconnected rows, narrow paths, and degenerate one-pixel dimensions.
+BORDER_FILL_CASES = (
+    ('empty', ('0',)),
+    ('single', ('1',)),
+    ('row', ('11010111',)),
+    ('column', ('1','1','0','1','0','1')),
+    ('row boundaries', ('11111','00000','10101','11111')),
+    ('enclosed island', ('11111','10001','10101','10001','11111')),
+    ('diagonal only', ('10000','01000','00100','00010','00001')),
+    ('narrow path', ('00100','00111','00001','11111','10000')),
+)
+MASK_RANDOM_SEED = 38191
+EROSION_RADII = (0, 1, 2, 3, 4, 7, 13, 16)

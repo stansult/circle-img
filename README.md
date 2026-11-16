@@ -343,6 +343,20 @@ colors, minimum size, and advanced-option conflicts. Rebuild its fixture with:
 .venv/bin/python tests/fixtures/generate_layered_circle.py
 ```
 
+`tests/test_background_optimization.py` checks optimized background masks against
+independent pixel-by-pixel references. Coverage includes four-neighbor connectivity,
+enclosed islands, diagonal contact, narrow paths, image borders, exact square
+erosion, color-tolerance boundaries, partial alpha, and contrasting fringe
+rejection. Hundreds of repeatable generated masks exercise the same rules without
+using machine-dependent speed limits in CI.
+
+The second-layer detector computes color masks in Pillow and flood-fills whole
+row segments. Square erosion uses overlapping shifted masks to reduce filter
+passes. These optimizations preserve the detection thresholds and pixel values;
+they do not resize the image or require additional dependencies. When changing
+this path, compare both foreground masks and saved output with the previous
+implementation, and measure full-command timing separately from profiler timings.
+
 `tests/test_min_size.py` checks the 256-pixel default, custom and disabled floors,
 large padded inputs, artwork or margins exceeding the floor, exact pixel
 preservation, saved output and preview dimensions, and invalid values.

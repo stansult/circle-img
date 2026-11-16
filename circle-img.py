@@ -154,7 +154,7 @@ def background_label(rgba):
 
 
 try:
-    from PIL import Image, ImageColor, ImageDraw, ImageOps, ImageFilter, PngImagePlugin
+    from PIL import Image, ImageColor, ImageDraw, ImageOps, ImageChops, PngImagePlugin
 except ModuleNotFoundError as exc:
     if exc.name != 'PIL' or __name__ != '__main__':
         raise
@@ -366,6 +366,98 @@ def edge_foreground(image, tolerance, *, outer_only=False):
     return artwork, candidate + (255,), f'edge RGB {candidate}, tolerance {tolerance}, corner patches {len(patches)}'
 
 
+def erode_square(mask, radius):
+    """Minimum over a square neighborhood, treating pixels outside the mask as 0.
+
+    Each pass combines three overlapping intervals per axis. Their union is
+    contiguous, so the radius can grow geometrically without changing the result.
+    Zero padding also makes wrapped offset pixels harmless in the final crop.
+    """
+    if radius == 0:
+        return mask.copy()
+    w, h = mask.size
+    result = Image.new('L', (w+2*radius, h+2*radius))
+    result.paste(mask, (radius, radius))
+    covered = 0
+    while covered < radius:
+        step = min(radius-covered, 2*covered+1)
+        horizontal = ImageChops.darker(result, ImageChops.offset(result, step, 0))
+        horizontal = ImageChops.darker(horizontal, ImageChops.offset(result, -step, 0))
+        result = ImageChops.darker(horizontal, ImageChops.offset(horizontal, 0, step))
+        result = ImageChops.darker(result, ImageChops.offset(horizontal, 0, -step))
+        covered += step
+    return result.crop((radius, radius, radius+w, radius+h))
+
+
+def border_connected(mask):
+    """Four-connected border region of a binary L mask, filled one row span at a time."""
+    w, h = mask.size
+    pending = bytearray(mask.tobytes())
+    filled = bytearray(w*h)
+    queue = list(range(w)) + list(range((h-1)*w, h*w))
+    queue.extend(y*w+x for y in range(1,h-1) for x in (0,w-1))
+    while queue:
+        index = queue.pop()
+        if not pending[index]:
+            continue
+        row_start = index//w*w
+        left = max(row_start, pending.rfind(b'\0', row_start, index)+1)
+        right = pending.find(b'\0', index, row_start+w)
+        if right < 0:
+            right = row_start+w
+        length = right-left
+        pending[left:right] = b'\0'*length
+        filled[left:right] = b'\xff'*length
+        for shift in (-w,w):
+            start, end = left+shift, right+shift
+            if start < 0 or end > len(pending):
+                continue
+            while start < end:
+                seed = pending.find(b'\xff', start, end)
+                if seed < 0:
+                    break
+                queue.append(seed)
+                stop = pending.find(b'\0', seed, end)
+                if stop < 0:
+                    break
+                start = stop+1
+    return Image.frombytes('L', mask.size, bytes(filled))
+
+
+def inner_background_region(image, core, candidate, tolerance):
+    """Return the removable border region, rejecting reachable contrasting fringe.
+
+    All comparisons have the same per-channel thresholds as the scalar rule.
+    Connectivity is kept separate from eligibility to preserve enclosed detail.
+    """
+    alpha = image.getchannel('A')
+    difference = ImageChops.difference(image.convert('RGB'), Image.new('RGB', image.size, candidate))
+    red, green, blue = difference.split()
+    distance = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+    matching = distance.point(lambda value: 255 if value <= tolerance else 0)
+    near_color = distance.point(lambda value: 255 if value <= max(32,tolerance) else 0)
+    partial_alpha = alpha.point(lambda value: 255 if value < 255 else 0)
+    fringe = ImageChops.invert(core)
+    eligible = ImageChops.lighter(matching, ImageChops.darker(fringe, ImageChops.lighter(partial_alpha, near_color)))
+    eligible = ImageChops.lighter(eligible, alpha.point(lambda value: 255 if value == 0 else 0))
+    # Release full-image comparison buffers before building connectivity masks.
+    del difference, red, green, blue, distance, matching, near_color, partial_alpha
+    removed = border_connected(eligible)
+
+    # A rejected pixel matters only if reached from the exterior. Four shifted
+    # masks preserve four-neighbor semantics; a 3x3 maximum would add diagonals.
+    w, h = image.size
+    padded = Image.new('L', (w+2,h+2), 255)
+    padded.paste(removed, (1,1))
+    adjacent = ImageChops.lighter(padded.crop((0,1,w,h+1)), padded.crop((2,1,w+2,h+1)))
+    adjacent = ImageChops.lighter(adjacent, padded.crop((1,0,w+1,h)))
+    adjacent = ImageChops.lighter(adjacent, padded.crop((1,2,w+1,h+2)))
+    blocked_fringe = ImageChops.darker(fringe, ImageChops.invert(eligible))
+    if ImageChops.darker(blocked_fringe, adjacent).getbbox() is not None:
+        raise ValueError('ambiguous background layer 2: contrasting content touches the outer boundary; use one layer or --mask')
+    return removed
+
+
 def inner_background(image, tolerance):
     """Peel a flat background along the visible silhouette, retaining enclosed detail.
 
@@ -383,15 +475,7 @@ def inner_background(image, tolerance):
     if min(right-left, bottom-top) < 12:
         reject('visible shape is too small to sample')
     band = max(2, min(16, min(right-left, bottom-top)//64))
-    # Pad before erosion so image edges are treated as exterior too.
-    opaque = Image.new('L', (image.width+2*band, image.height+2*band))
-    opaque.paste(alpha.point(lambda a: 255 if a == 255 else 0), (band, band))
-    def erode(mask):
-        for _ in range(band):
-            mask = mask.filter(ImageFilter.MinFilter(3))
-        return mask
-    core = erode(opaque).crop(
-        (band, band, band+image.width, band+image.height))
+    core = erode_square(alpha.point(lambda a: 255 if a == 255 else 0), band)
     pixels = image.load()
     sides = [[], [], [], []]
     for y, x0, x1 in row_extents(core):
@@ -412,39 +496,10 @@ def inner_background(image, tolerance):
     if any(sum(distance(rgb,candidate) <= tolerance for rgb in side)/len(side) < .95 for side in sides):
         reject('the visible boundary does not agree on one opaque color')
 
-    w, h = image.size
-    original_alpha = alpha.tobytes()
-    silhouette = Image.new('L', opaque.size)
-    silhouette.paste(alpha.point(lambda a: 255 if a else 0), (band,band))
-    core_bytes = erode(silhouette).crop(
-        (band,band,band+w,band+h)).tobytes()
-    remaining = bytearray(original_alpha)
-    seen = bytearray(w*h)
-    queue = deque()
-    def visit(x,y):
-        i = y*w+x
-        if seen[i]:
-            return
-        seen[i] = 1
-        rgb = pixels[x,y]
-        matching = distance(rgb,candidate) <= tolerance
-        fringe = not core_bytes[i] and (rgb[3] < 255 or distance(rgb,candidate) <= max(32,tolerance))
-        if not original_alpha[i] or matching or fringe:
-            remaining[i] = 0
-            queue.append((x,y))
-        elif not core_bytes[i]:
-            reject('contrasting content touches the outer boundary')
-    for x in range(w):
-        visit(x,0); visit(x,h-1)
-    for y in range(h):
-        visit(0,y); visit(w-1,y)
-    while queue:
-        x,y = queue.popleft()
-        for nx,ny in ((x-1,y),(x+1,y),(x,y-1),(x,y+1)):
-            if 0 <= nx < w and 0 <= ny < h:
-                visit(nx,ny)
+    silhouette_core = erode_square(alpha.point(lambda a: 255 if a else 0), band)
+    removed = inner_background_region(image, silhouette_core, candidate, tolerance)
     result = image.copy()
-    result.putalpha(Image.frombytes('L', image.size, bytes(remaining)))
+    result.putalpha(ImageChops.subtract(alpha, removed))
     if not result.getchannel('A').getbbox():
         reject('no foreground remains after removing the second background')
     return result, candidate+(255,), f'visible-boundary RGB {candidate}, tolerance {tolerance}'
