@@ -40,12 +40,12 @@ The setup above is only needed once; nothing is installed automatically.
 | --- | --- |
 | `-i`, `--input FILE [FILE ...]` | One or more raster images; required. Accepts shell-expanded wildcards and repeated `-i`. |
 | `-o`, `--output FILE\|DIR` | PNG file or existing directory. A directory keeps the input filename for PNG inputs; other extensions become `.png`. Default: `<input-stem>-circle.png` beside each input. Multiple inputs require an existing directory when `-o` is supplied. Parent must exist. |
-| `-b`, `--background COLOR` | When omitted: reuse the innermost excluded background color; transparency becomes white. Override with a Pillow color name, hex color, or `transparent`. |
+| `-b`, `--background COLOR` | When omitted: reuse the innermost excluded background color; transparency becomes white. With a mask, defaults to white. Override with a Pillow color name, hex color, or `transparent`. |
 | `--background-layers 1\|2` | Number of backgrounds to exclude, outside inward; default **1**. Use **2** for a colored circle/tile inside transparency or corner background. Cannot combine 2 with an explicit source background or mask. |
 | `--min-size N` | Nonnegative minimum output side length in pixels; default **256**. Use `0` to disable the floor. Adds background padding without resizing artwork. |
 | `--margin N` | Nonnegative integer minimum clearance from content to the **circle**, in output pixels; default 0. |
 | `--source-background COLOR` | Explicit opaque source background color; overrides automatic detection. |
-| `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 8 for automatic detection, otherwise 0. Applies to explicit or inferred source color. Cannot be used with a mask. |
+| `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 8 for automatic detection, otherwise 0. Applies to explicit or inferred source color. Only 0 is allowed with a mask. |
 | `--mask FILE` | Single-frame grayscale mask matching oriented input dimensions: white retains, black removes, gray reduces original alpha proportionally. The same mask is applied to every input. Exclusive with source background. |
 | `--preview` | Also save `<output-stem>-preview.png`, a circular-crop preview with transparent corners. |
 | `-O`, `--overwrite` | Replace existing output/preview files; input and mask are always protected. |
@@ -70,7 +70,8 @@ With multiple inputs, `-o` must be an existing directory or omitted. Without
 All processing options apply to every input; a supplied mask must match each
 image's oriented dimensions. Errors identify the affected file, processing
 continues with the remaining files, and the command exits with status 1 if any
-image failed (0 when all succeed). Successful outputs are retained.
+image failed (0 when all succeed). Invalid command syntax exits with status 2;
+interruption exits with status 130. Successful outputs are retained.
 
 Before processing starts, conflicting destination paths abort the whole batch,
 even with `-O`. This includes two inputs mapping to the same PNG name, duplicate
@@ -112,7 +113,9 @@ Redirected stderr and terminals with `TERM=dumb` receive no animation or termina
 control codes. Normal redirected output contains processing and saved-file
 messages, plus errors if needed. Saved-file messages include elapsed time since
 that file's processing began; a preview's elapsed time includes the main output.
-The final total always appears. The live counter starts at 5 seconds; completion
+Each successful save reports elapsed time, even for quick operations. Failed
+saves have no completion total; earlier successful saves remain reported.
+The live counter starts at 5 seconds; completion
 durations start at 10 seconds. These shared thresholds are defined once in
 `Reporter.ELAPSED_DELAY` and `Reporter.DURATION_THRESHOLD`, so every processing
 stage uses the same behavior without extra command-line options.
@@ -129,8 +132,10 @@ and completion times, each background layer's detection method and color, the
 selected output color, remaining content dimensions, final dimensions, placement,
 margin, and minimum size. Normal processing and saved-file messages stay on stdout.
 The initial date is written to whichever stream receives the first message.
-Reporting does not change output pixels. Failures clear the live line and identify
-the failed stage; interrupted runs exit with status 130. A preview failure can
+Reporting does not change output pixels. Errors identify the affected file when
+processing has begun. In an interactive terminal or verbose mode, failures also
+clear any live line and report the failed stage. Preflight failures have no stage
+to report; interrupted runs exit with status 130. A preview failure can
 leave an already saved main output, which is reported separately.
 
 This follows the same date/time and verbose-stream convention as pdf-slim.
@@ -158,6 +163,10 @@ Layers are counted **outside inward**; they are not file-format layers:
 | Artwork on a flat opaque color | Fit artwork; reuse that color | Attempt another background; reject if none can be identified confidently |
 | Colored circle on transparency | Fit the entire circle; white output background | Exclude transparency and circle color; fit inner artwork and reuse circle color |
 | Colored tile with white rounded corners | Exclude white corner remnants; fit the colored tile on white | Exclude corners and tile color; fit inner artwork and reuse tile color |
+
+Choose `--background-layers` for **what to fit**, and `--background` for
+**what color to put behind it**. `--source-background` is only a manual override
+when detection needs an explicit source color.
 
 Output color is independent of the layer count: `--background white`, another
 color, or `transparent` overrides the detected output color. Each image in a
@@ -343,8 +352,9 @@ tight fitting independently of the default output floor.
 `tests/test_reporting.py` uses independently verified clock and terminal helpers
 to check fixed start timestamps, completion timestamps, midnight rollover,
 monotonic elapsed time, the 5- and 10-second thresholds, live counter updates,
-thread cleanup, and redirected output. Real subprocess checks cover a pseudo-terminal, both verbose spellings,
-errors, batch continuation, preview failures, and identical saved pixels with
+thread cleanup, and redirected output. Real subprocess checks cover a
+pseudo-terminal, both verbose spellings, errors, batch continuation, preview
+failures, and identical saved pixels with
 reporting enabled or disabled. These checks run in the normal suite and CI.
 
 Regression checks should be shown to fail under a narrow temporary fault before

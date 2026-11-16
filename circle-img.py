@@ -641,23 +641,28 @@ def save_png(image, path, info, overwrite):
 
 
 def parser(reporter=None):
-    p = OperationalParser(description=__doc__, reporter=reporter)
+    p = OperationalParser(
+        description=__doc__, reporter=reporter,
+        epilog=f'Output is a square lossless PNG; only --preview applies a circular crop. '
+               f'Interactive stderr shows progress, with elapsed time from {Reporter.ELAPSED_DELAY:g}s; '
+               f'completion durations appear from {Reporter.DURATION_THRESHOLD:g}s. '
+               'Redirected output has no animation. See README.md for detection limits and examples.')
     p.add_argument('-i', '--input', type=Path, nargs='+', action='extend', required=True,
                    metavar='FILE', help='one or more images; accepts shell-expanded wildcards; repeatable')
     p.add_argument('-o', '--output', type=Path, metavar='FILE|DIR',
                    help='PNG file or existing directory (keeps input name; non-PNG suffix becomes .png); '
-                        'default: INPUT-circle.png')
-    p.add_argument('-b', '--background', help='output color or transparent; when omitted, reuse excluded background; transparency becomes white')
+                        'default: <input-stem>-circle.png beside each input; multiple inputs require a directory or omitted -o')
+    p.add_argument('-b', '--background', metavar='COLOR', help='output color or transparent; when omitted, reuse innermost excluded background; transparency and masks default to white')
     p.add_argument('--background-layers', type=int, choices=(1, 2), default=1,
-                   help='backgrounds to exclude, outside inward (default: 1); 2 also excludes an inner flat tile or circle')
-    p.add_argument('--margin', type=int, default=0, help='minimum clearance from circle in pixels')
+                   help='backgrounds to exclude, outside inward (default: 1); 2 also excludes an inner flat tile or circle; 2 cannot be combined with --source-background or --mask')
+    p.add_argument('--margin', type=int, default=0, help='nonnegative clearance between content and circular crop, in pixels (default: 0)')
     p.add_argument('--min-size', type=int, default=256,
                    help='minimum output side in pixels; 0 disables the floor (default: 256); no artwork resizing')
     group = p.add_mutually_exclusive_group()
-    group.add_argument('--source-background', help='explicit opaque source background color; overrides automatic detection')
-    group.add_argument('--mask', type=Path, help='grayscale foreground mask; white retains, black removes')
-    p.add_argument('--tolerance', type=int, help='maximum per-channel background difference, 0–255; default 8 for automatic detection, otherwise 0')
-    p.add_argument('--preview', action='store_true', help='also save OUTPUT-stem-preview.png with circular crop')
+    group.add_argument('--source-background', metavar='COLOR', help='explicit opaque source color to remove from the border; overrides automatic detection; exclusive with --mask and --background-layers 2')
+    group.add_argument('--mask', type=Path, metavar='FILE', help='single-frame grayscale mask matching oriented input size; white retains, black removes, gray reduces original alpha; applies to every input')
+    p.add_argument('--tolerance', type=int, help='maximum per-channel background difference, 0–255; default 8 for automatic detection, otherwise 0; nonzero values cannot be combined with --mask')
+    p.add_argument('--preview', action='store_true', help='also save <output-stem>-preview.png with a circular crop and transparent corners; main output stays square')
     p.add_argument('-O', '--overwrite', action='store_true', help='replace existing outputs (never the input or mask)')
     p.add_argument('-v', '--verbose', action='store_true',
                    help='timestamped settings, stages, detected colors, geometry, and timings on stderr')
