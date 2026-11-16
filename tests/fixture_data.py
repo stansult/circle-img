@@ -55,3 +55,11 @@ DISK_CASES = (
     ('circle with margin', (120, 120), (0, 0), 7, 134),
     ('off-center on larger canvas', (200, 160), (15, 5), 0, 200),
 )
+
+# Explicit edge-background fixture combinations; avoid irrelevant permutations.
+EDGE_TILE_CASES = (
+    ('rounded', dict()),
+    ('compression-like variations', dict(noise=True)),
+    ('flat', dict(rounded=False)),
+    ('transparent corners', dict(transparent=True)),
+)

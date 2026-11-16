@@ -25,6 +25,7 @@ python3 -m venv .venv
 ./circle-img.py -i logo.png --background transparent
 ./circle-img.py -i logo.jpg --source-background white --tolerance 10
 ./circle-img.py -i photo.png --mask foreground-mask.png
+./circle-img.py -i rounded-tile.png --source-background edge --background auto
 ```
 
 Run `./circle-img.py` directly; no environment activation is needed. If the
@@ -38,10 +39,10 @@ The setup above is only needed once; nothing is installed automatically.
 | --- | --- |
 | `-i`, `--input FILE [FILE ...]` | One or more raster images; required. Accepts shell-expanded wildcards and repeated `-i`. |
 | `-o`, `--output FILE\|DIR` | PNG file or existing directory. A directory keeps the input filename for PNG inputs; other extensions become `.png`. Default: `<input-stem>-circle.png` beside each input. Multiple inputs require an existing directory when `-o` is supplied. Parent must exist. |
-| `-b`, `--background COLOR` | Destination background: `white` by default, a Pillow color name, hex color, or `transparent`. |
+| `-b`, `--background COLOR` | Destination background: `white` by default, a Pillow color name, hex color, or `transparent`; `auto` reuses the detected color with `--source-background edge`. |
 | `--margin N` | Nonnegative integer minimum clearance from content to the **circle**, in output pixels; default 0. |
-| `--source-background COLOR` | Explicit opaque source background color; overrides alpha-based detection. |
-| `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 0. Applies to explicit or inferred source color. Cannot be used with a mask. |
+| `--source-background COLOR\|edge` | Explicit opaque source background color, or opt-in `edge` detection for flat tiles with matching rounded-corner remnants; overrides alpha-based detection. |
+| `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 8 in `edge` mode, otherwise 0. Applies to explicit or inferred source color. Cannot be used with a mask. |
 | `--mask FILE` | Single-frame grayscale mask matching oriented input dimensions: white retains, black removes, gray reduces original alpha proportionally. The same mask is applied to every input. Exclusive with source background. |
 | `--preview` | Also save `<output-stem>-preview.png`, a circular-crop preview with transparent corners. |
 | `-O`, `--overwrite` | Replace existing output/preview files; input and mask are always protected. |
@@ -96,6 +97,41 @@ per-channel RGB difference, not a perceptual color distance. The script does not
 recover antialiased edges blended into an opaque background: halos may remain,
 and increasing tolerance can remove foreground detail. Complex backgrounds,
 photos, and gradients generally need a prepared mask. Empty foreground is an error.
+
+## Flat tiles with rounded corners
+
+Use `--source-background edge --background auto` to fit the artwork inside a flat
+colored tile and reuse the tile's background color in the output. Normal automatic
+detection and the default white output remain unchanged when these options are absent.
+
+Edge mode requires at least 95% of the middle half of **each** edge to agree on one
+opaque color. Its default tolerance is 8 per RGB channel to allow small compression
+variations; `--tolerance` overrides it. It removes border-connected pixels matching
+that color, then separately checks any remaining corner-connected regions.
+
+Corner cleanup requires four patches with similar colors and sizes, confined to
+less than a quarter of the shorter image dimension from each corner. The patches
+must narrow inward and have colors consistent with a blend into the main background
+(the corner blend check allows up to 24 levels of per-channel variation, or the
+specified tolerance if larger). A clean flat background or transparent corners
+needs no such cleanup. Unrecognized content touching an edge, inconsistent corners,
+and inputs smaller than 8 pixels on either axis are rejected. Fully transparent
+edges cannot supply an opaque background color; use normal alpha detection instead.
+
+The background and corner colors are **not** flood-filled together: that would risk
+removing enclosed artwork of the same color as the corners. Retained foreground
+pixels and enclosed details are preserved. The original-image minimum canvas size
+still applies, so existing padding may remain even after the tile is excluded from
+fitting. Artwork is never enlarged to fill that space.
+
+This is a heuristic for simple flat tiles, not semantic segmentation. Matching
+marks in all four corners can be indistinguishable from background remnants. Use
+an explicit source color or a prepared mask when the assumption does not apply.
+Compression artifacts and foreground edges already blended with a background are
+not reconstructed; a different output color can reveal residual halos.
+
+`--background auto` requires `--source-background edge`. Explicit output colors and
+`transparent` remain supported; each image in a batch gets its own detected color.
 
 ## Geometry and quality
 
@@ -189,6 +225,15 @@ verified 60-pixel enclosing radius. Rebuild it with:
 
 ```bash
 .venv/bin/python tests/fixtures/generate_disk.py
+```
+
+`tests/test_edge_background.py` validates edge inference and the foreground mask
+against a synthetic rounded tile, including blended corners, small color variations,
+transparent corners, enclosed artwork, ambiguous inputs, margins, and batch output
+colors. Rebuild the fixture with:
+
+```bash
+.venv/bin/python tests/fixtures/generate_rounded_tile.py
 ```
 
 Regression checks should be shown to fail under a narrow temporary fault before

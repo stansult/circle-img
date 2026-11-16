@@ -68,6 +68,9 @@ def foreground(image, source_background=None, tolerance=0, mask=None):
         from PIL import ImageChops
         result.putalpha(ImageChops.multiply(image.getchannel('A'), mask.convert('L')))
         return result, 'supplied mask'
+    if source_background == 'edge':
+        artwork, _, method = edge_foreground(image, tolerance)
+        return artwork, method
     if source_background is None and image.getchannel('A').getextrema()[0] < 255:
         return result, 'existing alpha'
     w, h = image.size
@@ -113,6 +116,100 @@ def foreground(image, source_background=None, tolerance=0, mask=None):
                 visit(nx, ny)
     result.putalpha(alpha)
     return result, f'border-connected RGB {candidate}, tolerance {tolerance}'
+
+
+def edge_foreground(image, tolerance):
+    """Infer a flat tile background and remove four matching corner remnants.
+
+    Corner components are examined AFTER the main-color flood fill. They never
+    become traversable seeds for that fill, so enclosed same-colored artwork
+    cannot be reached through the main background.
+    """
+    w, h = image.size
+    pixels = image.load()
+
+    def reject(reason):
+        raise ValueError(f'ambiguous edge background: {reason}; use an explicit color or --mask')
+
+    def distance(a, b):
+        return max(abs(a[c] - b[c]) for c in range(3))
+
+    if min(w, h) < 8:
+        reject('image is too small to sample four edges')
+    sides = [[pixels[x, y] for x in range(w // 4, w - w // 4)] for y in (0, h - 1)]
+    sides += [[pixels[x, y] for y in range(h // 4, h - h // 4)] for x in (0, w - 1)]
+    samples = [pixel[:3] for side in sides for pixel in side if pixel[3] == 255]
+    if not samples:
+        reject('no opaque edge samples; use normal alpha detection for transparent artwork')
+    seed = Counter(samples).most_common(1)[0][0]
+    inliers = [rgb for rgb in samples if distance(rgb, seed) <= tolerance]
+    candidate = tuple(sorted(rgb[c] for rgb in inliers)[len(inliers) // 2] for c in range(3))
+    for side in sides:
+        if sum(pixel[3] == 255 and distance(pixel, candidate) <= tolerance for pixel in side) / len(side) < .95:
+            reject('the middle half of each edge must agree on one opaque color')
+
+    hex_color = '#{:02x}{:02x}{:02x}'.format(*candidate)
+    artwork, _ = foreground(image, hex_color, tolerance)
+    alpha = artwork.getchannel('A')
+    ap = alpha.load()
+    patches = []
+    colors = []
+    corners = ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))
+    limit = min(w, h) // 4
+    for sx, sy in corners:
+        if not ap[sx, sy]:
+            continue
+        corner_color = pixels[sx, sy][:3]
+        if pixels[sx, sy][3] != 255 or distance(corner_color, candidate) <= 2 * tolerance + 24:
+            reject('corner color is not clearly separated from the background')
+        component = {(sx, sy)}
+        queue = deque(component)
+        while queue:
+            x, y = queue.popleft()
+            if abs(x - sx) >= limit or abs(y - sy) >= limit:
+                reject('corner content extends beyond a small corner region')
+            for nx, ny in ((x-1, y), (x+1, y), (x, y-1), (x, y+1)):
+                if 0 <= nx < w and 0 <= ny < h and ap[nx, ny] and (nx, ny) not in component:
+                    component.add((nx, ny))
+                    queue.append((nx, ny))
+        # Accept only a corner-colored patch fading into the inferred background.
+        vector = tuple(corner_color[c] - candidate[c] for c in range(3))
+        denominator = sum(v*v for v in vector)
+        for x, y in component:
+            rgb = pixels[x, y]
+            amount = max(0, min(1, sum((rgb[c]-candidate[c])*vector[c] for c in range(3)) / denominator))
+            if max(abs(rgb[c]-candidate[c]-amount*vector[c]) for c in range(3)) > max(24, tolerance):
+                reject('corner contains colors inconsistent with a blended background')
+        normalized = {(abs(x-sx), abs(y-sy)) for x, y in component}
+        # A rounded-corner remnant narrows inward, allowing two pixels of noise.
+        previous = limit
+        for y in range(max(y for _, y in normalized) + 1):
+            row = [x for x, yy in normalized if yy == y]
+            if not row or min(row) > 1 or max(row) > previous + 2:
+                reject('corner shape is not a rounded-tile remnant')
+            previous = max(row)
+        patches.append(component)
+        colors.append(corner_color)
+
+    if patches:
+        if len(patches) != 4:
+            reject('corner remnants must appear at all four corners')
+        if any(distance(rgb, colors[0]) > max(8, tolerance) for rgb in colors[1:]):
+            reject('corner colors disagree')
+        widths = [max(x for x, _ in patch)-min(x for x, _ in patch)+1 for patch in patches]
+        heights = [max(y for _, y in patch)-min(y for _, y in patch)+1 for patch in patches]
+        for lengths in (widths, heights):
+            if max(lengths)-min(lengths) > max(3, max(lengths) / 4):
+                reject('corner sizes disagree')
+        for patch in patches:
+            for x, y in patch:
+                ap[x, y] = 0
+
+    # Any other border-connected artwork remains ambiguous; do not discard it.
+    if any(ap[x, y] for y in (0, h-1) for x in range(w)) or any(ap[x, y] for x in (0, w-1) for y in range(h)):
+        reject('unrecognized foreground touches an edge')
+    artwork.putalpha(alpha)
+    return artwork, candidate + (255,), f'edge RGB {candidate}, tolerance {tolerance}, corner patches {len(patches)}'
 
 
 def row_extents(alpha):
@@ -272,12 +369,12 @@ def parser():
     p.add_argument('-o', '--output', type=Path, metavar='FILE|DIR',
                    help='PNG file or existing directory (keeps input name; non-PNG suffix becomes .png); '
                         'default: INPUT-circle.png')
-    p.add_argument('-b', '--background', default='white', help='color or transparent (default: white)')
+    p.add_argument('-b', '--background', default='white', help='color, transparent, or auto with --source-background edge (default: white)')
     p.add_argument('--margin', type=int, default=0, help='minimum clearance from circle in pixels')
     group = p.add_mutually_exclusive_group()
-    group.add_argument('--source-background', help='opaque source background color to remove')
+    group.add_argument('--source-background', help='opaque source background color, or edge for flat tiles with matching corners')
     group.add_argument('--mask', type=Path, help='grayscale foreground mask; white retains, black removes')
-    p.add_argument('--tolerance', type=int, default=0, help='maximum per-channel background difference, 0–255')
+    p.add_argument('--tolerance', type=int, help='maximum per-channel background difference, 0–255; default 8 in edge mode, otherwise 0')
     p.add_argument('--preview', action='store_true', help='also save OUTPUT-stem-preview.png with circular crop')
     p.add_argument('-O', '--overwrite', action='store_true', help='replace existing outputs (never the input or mask)')
     p.add_argument('-v', '--verbose', action='store_true')
@@ -332,7 +429,12 @@ def process_image(source, destinations, args, background):
             if supplied.mode not in ('1', 'L') or getattr(supplied, 'n_frames', 1) != 1:
                 raise ValueError('mask must be a single-frame grayscale image')
             mask = ImageOps.exif_transpose(supplied).copy()
-    artwork, method = foreground(image, args.source_background, args.tolerance, mask)
+    if args.source_background == 'edge':
+        artwork, detected_background, method = edge_foreground(image, args.tolerance)
+        if background is None:
+            background = detected_background
+    else:
+        artwork, method = foreground(image, args.source_background, args.tolerance, mask)
     result, layer, offset = render(artwork, background, args.margin)
     save_png(result, output, info, args.overwrite)
     print(f'Saved {output} ({result.width} × {result.height})')
@@ -347,11 +449,18 @@ def process_image(source, destinations, args, background):
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        if args.tolerance is None:
+            args.tolerance = 8 if args.source_background == 'edge' else 0
         if args.margin < 0 or not 0 <= args.tolerance <= 255:
             raise ValueError('margin must be nonnegative; tolerance must be between 0 and 255')
         if args.mask and args.tolerance:
             raise ValueError('--tolerance cannot be combined with --mask')
-        background = color(args.background)
+        if args.background.lower() == 'auto':
+            if args.source_background != 'edge':
+                raise ValueError('--background auto requires --source-background edge')
+            background = None
+        else:
+            background = color(args.background)
         plans = plan_outputs(args)
     except (ValueError, OSError) as exc:
         print(f'error: {exc}', file=sys.stderr)
