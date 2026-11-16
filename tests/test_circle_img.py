@@ -47,10 +47,10 @@ class GeometryTests(unittest.TestCase):
         for source in shapes:
             for margin in (0, 1, 12):
                 with self.subTest(size=source.size, margin=margin):
-                    output, layer, offset = app.render(source, (0, 0, 0, 0), margin)
+                    output, layer, offset = app.render(source, (0, 0, 0, 0), margin, min_size=0)
                     self.assert_contained(layer, margin)
-                    self.assertGreaterEqual(output.width, max(source.size))
                     crop = source.crop(source.getchannel('A').getbbox())
+                    self.assertGreaterEqual(output.width, max(crop.size))
                     x, y = offset
                     self.assertEqual(layer.crop((x, y, x + crop.width, y + crop.height)).tobytes(), crop.tobytes())
                     self.assertEqual(output.tobytes(), layer.tobytes())
@@ -64,9 +64,9 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(diamond.getchannel('A').getbbox(), (0, 0, 21, 21))
         self.assertEqual(sum(a > 0 for a in diamond.getchannel('A').get_flattened_data()), 221)
         square = Image.new('RGBA', (21, 21), 'red')
-        out, layer, _ = app.render(diamond, (255, 255, 255, 255), 0)
+        out, layer, _ = app.render(diamond, (255, 255, 255, 255), 0, min_size=0)
         self.assert_contained(layer, 0)
-        self.assertLess(out.width, app.render(square, (255, 255, 255, 255), 0)[0].width)
+        self.assertLess(out.width, app.render(square, (255, 255, 255, 255), 0, min_size=0)[0].width)
 
     def test_composite_known_values(self):
         source = fixture((3, 3), (1, 1, 1, 1), (100, 50, 0, 128))

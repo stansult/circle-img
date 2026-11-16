@@ -85,7 +85,7 @@ class PreservationTests(unittest.TestCase):
                 count = (box[2] - box[0] + 1) * (box[3] - box[1] + 1)
                 self.assertEqual(len(occupied(source)), count)
                 self.assertEqual(source.getchannel('A').getbbox(), (box[0], box[1], box[2] + 1, box[3] + 1))
-                result, _, _ = app.render(source, (0, 0, 0, 0), margin)
+                result, _, _ = app.render(source, (0, 0, 0, 0), margin, min_size=0)
                 self.assertEqual(result.size, (expected_side, expected_side))
                 self.assertEqual(len(occupied(result)), count)
                 assert_circle(self, result, occupied(result), margin)
@@ -145,7 +145,7 @@ class SavedImageTests(unittest.TestCase):
         self.assertEqual(source.getpixel((0, 0)), (0, 0, 0, 0))
         self.assertEqual(len(occupied(source)), 48)
         source.save(self.source)
-        result = self.run_cli('--background', 'transparent')
+        result = self.run_cli('--background', 'transparent', '--min-size', '0')
         # Diagonal is exactly 10, with integer placement on a 10x10 canvas.
         self.assertEqual(result.size, (10, 10))
         self.assertEqual(len(occupied(result)), 48)

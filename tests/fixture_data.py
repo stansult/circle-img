@@ -22,12 +22,12 @@ ARTWORK_COLORS = {
 }
 # These even-sized symmetric cases have independently known tight solutions:
 # 6x8 rectangle: diagonal 10. 8x8 square: diagonal sqrt(128), rounded to 12.
-# With margin 3, the latter needs side 18. Large existing canvas stays at 40.
+# With margin 3, the latter needs side 18. With min-size 0, input padding is discarded.
 PADDING_CASES = (
     ('pythagorean rectangle', (6, 8), (0, 0, 5, 7), 0, 10),
     ('filled square', (8, 8), (0, 0, 7, 7), 0, 12),
     ('square with radial margin', (8, 8), (0, 0, 7, 7), 3, 18),
-    ('existing large canvas', (40, 32), (2, 3, 7, 10), 0, 40),
+    ('discard existing padding', (40, 32), (2, 3, 7, 10), 0, 10),
 )
 # An 11x11 image has exactly 40 unique border pixels.
 BORDER_CASES = (
@@ -49,11 +49,11 @@ CIRCLE_RANDOM_CASES = 500
 CIRCLE_RANDOM_POINTS = 8
 CIRCLE_COORDINATE_LIMIT = 20
 
-# label, input canvas, disk origin, radial margin, expected output side.
+# label, input canvas, disk origin, radial margin, expected side with min-size 0.
 DISK_CASES = (
     ('tight circle', (120, 120), (0, 0), 0, 120),
     ('circle with margin', (120, 120), (0, 0), 7, 134),
-    ('off-center on larger canvas', (200, 160), (15, 5), 0, 200),
+    ('off-center on larger canvas', (200, 160), (15, 5), 0, 120),
 )
 
 # Explicit edge-background fixture combinations; avoid irrelevant permutations.
@@ -62,4 +62,16 @@ EDGE_TILE_CASES = (
     ('compression-like variations', dict(noise=True)),
     ('flat', dict(rounded=False)),
     ('transparent corners', dict(transparent=True)),
+)
+
+# label, input size, occupied box (exclusive right/bottom), margin, minimum, output side.
+# None means exercise the default rather than passing an explicit minimum.
+MIN_SIZE_CASES = (
+    ('small artwork default', (20, 20), (4, 5, 10, 13), 0, None, 256),
+    ('large padded input default', (1200, 900), (900, 600, 906, 608), 0, None, 256),
+    ('custom minimum', (20, 20), (4, 5, 10, 13), 0, 512, 512),
+    ('odd minimum', (20, 20), (4, 5, 10, 13), 0, 257, 257),
+    ('disabled floor', (1200, 900), (900, 600, 906, 608), 0, 0, 10),
+    ('artwork exceeds minimum', (400, 500), (20, 30, 320, 430), 0, None, 500),
+    ('margin exceeds minimum', (20, 20), (4, 5, 10, 13), 125, None, 260),
 )

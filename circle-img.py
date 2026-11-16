@@ -295,9 +295,11 @@ def enclosing_circle(points):
     return circle
 
 
-def layout(artwork, margin):
+def layout(artwork, margin, min_size=256):
     if margin < 0:
         raise ValueError('margin must be nonnegative')
+    if min_size < 0:
+        raise ValueError('min-size must be nonnegative')
     box = artwork.getchannel('A').getbbox()
     if box is None:
         raise ValueError('no foreground content remains')
@@ -308,7 +310,7 @@ def layout(artwork, margin):
               for x in (left, right + 1) for yy in (y, y + 1)]
     cx, cy, _ = enclosing_circle(points)
     # Recompute against every occupied row, without the solver's float tolerance.
-    side = max(*artwork.size, math.ceil(2 * (radius(extents, cx, cy) + margin)))
+    side = max(min_size, math.ceil(2 * (radius(extents, cx, cy) + margin)))
     while True:
         # No fractional translation/resampling: try the four adjacent placements.
         # Nearest integer placement needs at most two extra canvas pixels.
@@ -322,8 +324,8 @@ def layout(artwork, margin):
         side += 1
 
 
-def render(artwork, background, margin):
-    cropped, side, offset = layout(artwork, margin)
+def render(artwork, background, margin, min_size=256):
+    cropped, side, offset = layout(artwork, margin, min_size)
     layer = Image.new('RGBA', (side, side))
     layer.paste(cropped, offset)  # No mask: preserve straight-alpha values exactly.
     output = Image.alpha_composite(Image.new('RGBA', layer.size, background), layer)
@@ -371,6 +373,8 @@ def parser():
                         'default: INPUT-circle.png')
     p.add_argument('-b', '--background', default='white', help='color, transparent, or auto with --source-background edge (default: white)')
     p.add_argument('--margin', type=int, default=0, help='minimum clearance from circle in pixels')
+    p.add_argument('--min-size', type=int, default=256,
+                   help='minimum output side in pixels; 0 disables the floor (default: 256); no artwork resizing')
     group = p.add_mutually_exclusive_group()
     group.add_argument('--source-background', help='opaque source background color, or edge for flat tiles with matching corners')
     group.add_argument('--mask', type=Path, help='grayscale foreground mask; white retains, black removes')
@@ -435,7 +439,7 @@ def process_image(source, destinations, args, background):
             background = detected_background
     else:
         artwork, method = foreground(image, args.source_background, args.tolerance, mask)
-    result, layer, offset = render(artwork, background, args.margin)
+    result, layer, offset = render(artwork, background, args.margin, args.min_size)
     save_png(result, output, info, args.overwrite)
     print(f'Saved {output} ({result.width} × {result.height})')
     if args.preview:
@@ -443,12 +447,14 @@ def process_image(source, destinations, args, background):
         print(f'Saved preview {destinations[1]}')
     if args.verbose:
         print(f'{source}: background: {method}; original: {image.width} × {image.height}; '
-              f'placement: {offset}; circular margin: {args.margin}px; no resampling')
+              f'placement: {offset}; circular margin: {args.margin}px; minimum side: {args.min_size}px; no resampling')
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        if args.min_size < 0:
+            raise ValueError('min-size must be nonnegative')
         if args.tolerance is None:
             args.tolerance = 8 if args.source_background == 'edge' else 0
         if args.margin < 0 or not 0 <= args.tolerance <= 255:

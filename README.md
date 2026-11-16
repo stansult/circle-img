@@ -23,6 +23,7 @@ python3 -m venv .venv
 ./circle-img.py -i first.png second.png --margin 12
 ./circle-img.py -i logo.png --background '#f5f5f5'
 ./circle-img.py -i logo.png --background transparent
+./circle-img.py -i logo.png --min-size 512  # use 0 for the tightest fit
 ./circle-img.py -i logo.jpg --source-background white --tolerance 10
 ./circle-img.py -i photo.png --mask foreground-mask.png
 ./circle-img.py -i rounded-tile.png --source-background edge --background auto
@@ -40,6 +41,7 @@ The setup above is only needed once; nothing is installed automatically.
 | `-i`, `--input FILE [FILE ...]` | One or more raster images; required. Accepts shell-expanded wildcards and repeated `-i`. |
 | `-o`, `--output FILE\|DIR` | PNG file or existing directory. A directory keeps the input filename for PNG inputs; other extensions become `.png`. Default: `<input-stem>-circle.png` beside each input. Multiple inputs require an existing directory when `-o` is supplied. Parent must exist. |
 | `-b`, `--background COLOR` | Destination background: `white` by default, a Pillow color name, hex color, or `transparent`; `auto` reuses the detected color with `--source-background edge`. |
+| `--min-size N` | Nonnegative minimum output side length in pixels; default **256**. Use `0` to disable the floor. Adds background padding without resizing artwork. |
 | `--margin N` | Nonnegative integer minimum clearance from content to the **circle**, in output pixels; default 0. |
 | `--source-background COLOR\|edge` | Explicit opaque source background color, or opt-in `edge` detection for flat tiles with matching rounded-corner remnants; overrides alpha-based detection. |
 | `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 8 in `edge` mode, otherwise 0. Applies to explicit or inferred source color. Cannot be used with a mask. |
@@ -120,9 +122,10 @@ edges cannot supply an opaque background color; use normal alpha detection inste
 
 The background and corner colors are **not** flood-filled together: that would risk
 removing enclosed artwork of the same color as the corners. Retained foreground
-pixels and enclosed details are preserved. The original-image minimum canvas size
-still applies, so existing padding may remain even after the tile is excluded from
-fitting. Artwork is never enlarged to fill that space.
+pixels and enclosed details are preserved. The configurable minimum canvas size
+(default 256 pixels) still applies, so padding may remain even after the tile is
+excluded from fitting. Use `--min-size 0` for the tightest fit. Artwork is never
+enlarged to fill that space.
 
 This is a heuristic for simple flat tiles, not semantic segmentation. Matching
 marks in all four corners can be indistinguishable from background remnants. Use
@@ -144,9 +147,15 @@ All foreground pixel areas must fit within the circle with the requested margin.
 The artwork itself is never resized. Placement uses whole pixels: the script
 checks the four placements surrounding the ideal position and enlarges the
 canvas if needed. This rounding can add up to two pixels to the ideal canvas
-side; it does not search every possible whole-pixel placement. The canvas is
-never smaller than the larger original dimension. Existing background padding
-can be redistributed.
+side; it does not search every possible whole-pixel placement.
+
+The canvas side is at least `--min-size` (default **256 pixels**) and large enough
+for the foreground plus radial margin. The original image dimensions do not set
+a lower bound: excess background on large inputs can be discarded. Small artwork
+receives additional background padding, not enlargement; large artwork is never
+shrunk to meet the minimum. Use `--min-size 0` for a tight fit without a size floor,
+or another nonnegative integer to choose a different floor. Whole-pixel placement
+can require an extra pixel even when the requested minimum would otherwise fit.
 
 For a fixed center, required side length is at least `ceil(2 × (radius + margin))`;
 integer placement may require extra pixels. A filled square needs more
@@ -235,6 +244,12 @@ colors. Rebuild the fixture with:
 ```bash
 .venv/bin/python tests/fixtures/generate_rounded_tile.py
 ```
+
+`tests/test_min_size.py` checks the 256-pixel default, custom and disabled floors,
+large padded inputs, artwork or margins exceeding the floor, exact pixel
+preservation, saved output and preview dimensions, and invalid values.
+Geometry tests use explicit small or zero minima where necessary to exercise
+tight fitting independently of the default output floor.
 
 Regression checks should be shown to fail under a narrow temporary fault before
 being accepted; restore the implementation and rerun the complete suite afterward.

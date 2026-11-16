@@ -65,8 +65,8 @@ class EdgeBackgroundTests(unittest.TestCase):
                 expected = self.expected_artwork(source)
                 self.assertEqual(art.getchannel('A').tobytes(), expected.getchannel('A').tobytes())
                 self.assertEqual(art.crop((24,24,56,56)).tobytes(), expected.crop((24,24,56,56)).tobytes())
-                # Artwork, not the tile, determines padding; retain input-size floor.
-                self.assertEqual(app.render(art, fixture.BACKGROUND+(255,), 0)[0].size, (80,80))
+                # With the floor disabled, only the 32x32 artwork determines padding.
+                self.assertEqual(app.render(art, fixture.BACKGROUND+(255,), 0, min_size=0)[0].size, (46,46))
 
     def test_uncertain_edges_or_corners_rejected(self):
         conflicting = fixture.make_tile()
@@ -91,7 +91,7 @@ class EdgeBackgroundTests(unittest.TestCase):
     def test_radial_margin_and_pixel_preservation(self):
         source = fixture.make_tile()
         artwork, _ = app.foreground(source,'edge',8)
-        result, layer, _ = app.render(artwork,(0,0,0,0),30)
+        result, layer, _ = app.render(artwork,(0,0,0,0),30,min_size=0)
         # 32x32 square support: ceil(sqrt(32**2+32**2) + 2*30) = 106.
         self.assertEqual(result.size,(106,106))
         self.assertEqual(result.crop((37,37,69,69)).tobytes(),source.crop((24,24,56,56)).tobytes())
@@ -128,7 +128,7 @@ class EdgeBackgroundTests(unittest.TestCase):
                 source = folder/(name+'.png')
                 fixture.make_tile(background=bg).save(source)
                 sources.append(source)
-            run = self.cli('-i',*sources,'-o',destination,'--source-background','edge','-b','auto','--preview')
+            run = self.cli('-i',*sources,'-o',destination,'--source-background','edge','-b','auto','--preview','--min-size','80')
             self.assertEqual(run.returncode,0,run.stderr)
             for source,bg in zip(sources,((30,130,150),(120,60,140))):
                 with Image.open(destination/source.name) as image:
@@ -137,7 +137,7 @@ class EdgeBackgroundTests(unittest.TestCase):
                     self.assertEqual(image.crop((24,24,56,56)).tobytes(),fixture.make_tile(background=bg).crop((24,24,56,56)).tobytes())
                 self.assertTrue((destination/(source.stem+'-preview.png')).exists())
             for bg in ('transparent','#123456'):
-                run=self.cli('-i',sources[0],'-o',destination,'--source-background','edge','-b',bg,'-O')
+                run=self.cli('-i',sources[0],'-o',destination,'--source-background','edge','-b',bg,'-O','--min-size','80')
                 self.assertEqual(run.returncode,0,run.stderr)
                 with Image.open(destination/sources[0].name) as image:
                     self.assertEqual(image.getpixel((0,0)),app.color(bg))

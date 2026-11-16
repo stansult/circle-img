@@ -45,7 +45,7 @@ class OptimizedGeometryTests(unittest.TestCase):
                 art = source.rotate(90 * turns, expand=True)
                 output, layer, (x, y) = app.render(art, (0, 0, 0, 0), margin)
                 self.assertLessEqual(output.width, 628 + 2 * margin)
-                self.assertGreaterEqual(output.width, max(art.size))
+                self.assertGreaterEqual(output.width, 256)
                 crop = art.crop(art.getbbox())
                 self.assertEqual(layer.crop((x, y, x + crop.width, y + crop.height)).tobytes(), crop.tobytes())
                 self.assertEqual(output.getchannel('A').tobytes(), layer.getchannel('A').tobytes())

@@ -66,7 +66,7 @@ class CircularForegroundTests(unittest.TestCase):
                 source = Image.new('RGBA', size)
                 source.paste(disk, origin)
                 self.assertEqual(source.getbbox(), (origin[0]+1, origin[1]+1, origin[0]+119, origin[1]+119))
-                result, _, _ = app.render(source, (0, 0, 0, 0), margin)
+                result, _, _ = app.render(source, (0, 0, 0, 0), margin, min_size=0)
                 expected = Image.new('RGBA', (side, side))
                 expected.paste(disk, ((side-120)//2, (side-120)//2))
                 self.assertEqual(result.size, expected.size)
@@ -81,7 +81,7 @@ class CircularForegroundTests(unittest.TestCase):
                 if rgba[3] and math.hypot(x + .5 - 60, y + .5 - 60) > 58:
                     disk.putpixel((x, y), rgba[:3] + (1,))
         self.assertEqual(disk.getpixel((95, 107))[3], 1)
-        result, _, _ = app.render(disk, (0, 0, 0, 0), 0)
+        result, _, _ = app.render(disk, (0, 0, 0, 0), 0, min_size=0)
         self.assertEqual(result.size, (120, 120))
         self.assertEqual(result.tobytes(), disk.tobytes())
         self.assert_contained(result, 0)
@@ -90,7 +90,7 @@ class CircularForegroundTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'disk.png'
             run = subprocess.run([sys.executable, str(ROOT / 'circle-img.py'), '-i', str(FIXTURE),
-                                  '-o', str(target), '-b', 'transparent', '--margin', '7'],
+                                  '-o', str(target), '-b', 'transparent', '--margin', '7', '--min-size', '0'],
                                  capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)
             expected = Image.new('RGBA', (134, 134))
