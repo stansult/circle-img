@@ -26,7 +26,7 @@ python3 -m venv .venv
 ./circle-img.py -i logo.png --min-size 512  # use 0 for the tightest fit
 ./circle-img.py -i logo.jpg --source-background white --tolerance 10
 ./circle-img.py -i photo.png --mask foreground-mask.png
-./circle-img.py -i rounded-tile.png --source-background edge --background auto
+./circle-img.py -i colored-circle.png --background-layers 2
 ```
 
 Run `./circle-img.py` directly; no environment activation is needed. If the
@@ -40,11 +40,12 @@ The setup above is only needed once; nothing is installed automatically.
 | --- | --- |
 | `-i`, `--input FILE [FILE ...]` | One or more raster images; required. Accepts shell-expanded wildcards and repeated `-i`. |
 | `-o`, `--output FILE\|DIR` | PNG file or existing directory. A directory keeps the input filename for PNG inputs; other extensions become `.png`. Default: `<input-stem>-circle.png` beside each input. Multiple inputs require an existing directory when `-o` is supplied. Parent must exist. |
-| `-b`, `--background COLOR` | Destination background: `white` by default, a Pillow color name, hex color, or `transparent`; `auto` reuses the detected color with `--source-background edge`. |
+| `-b`, `--background COLOR` | Default `auto`: reuse the innermost excluded background color; transparency becomes white. Override with a Pillow color name, hex color, or `transparent`. |
+| `--background-layers 1\|2` | Number of backgrounds to exclude, outside inward; default **1**. Use **2** for a colored circle/tile inside transparency or corner background. Cannot combine 2 with an explicit source background or mask. |
 | `--min-size N` | Nonnegative minimum output side length in pixels; default **256**. Use `0` to disable the floor. Adds background padding without resizing artwork. |
 | `--margin N` | Nonnegative integer minimum clearance from content to the **circle**, in output pixels; default 0. |
 | `--source-background COLOR\|edge` | Explicit opaque source background color, or opt-in `edge` detection for flat tiles with matching rounded-corner remnants; overrides alpha-based detection. |
-| `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 8 in `edge` mode, otherwise 0. Applies to explicit or inferred source color. Cannot be used with a mask. |
+| `--tolerance N` | Maximum difference in any RGB channel from source background, 0–255; default 8 for automatic/`edge` detection, otherwise 0. Applies to explicit or inferred source color. Cannot be used with a mask. |
 | `--mask FILE` | Single-frame grayscale mask matching oriented input dimensions: white retains, black removes, gray reduces original alpha proportionally. The same mask is applied to every input. Exclusive with source background. |
 | `--preview` | Also save `<output-stem>-preview.png`, a circular-crop preview with transparent corners. |
 | `-O`, `--overwrite` | Replace existing output/preview files; input and mask are always protected. |
@@ -77,64 +78,87 @@ inputs, preview/output collisions, and names differing only by case. No output
 may replace any input or the mask. Keep output files in a separate directory
 when using wildcards so later runs do not include previous results as inputs.
 
-## Content and background rules
+## Background layers
 
-1. An explicit mask determines foreground coverage, multiplied by existing alpha.
-2. Otherwise, when any input pixel has alpha below 255, existing alpha defines
-   foreground, unless `--source-background` was supplied. Every nonzero alpha
-   counts, including faint edges and shadows. Transparent gaps and holes receive
-   the new background automatically. This assumes alpha already separates the
-   intended artwork; a mixed transparent/opaque backdrop may need a mask.
-3. For fully opaque input, automatic detection selects the most common RGB color
-   on the outer border. At least 95% of border pixels must match it within the
-   tolerance. Otherwise processing stops and requests an explicit color or mask.
-4. Starting at matching border pixels, four-connected flood fill removes only
-   matching pixels. Enclosed areas are preserved, even if they share the source
-   background color. Use a mask if enclosed areas should also be removed.
+Usually no background options are needed. The script excludes **one background**
+from fitting, then uses its color for the output. **Transparency becomes white**
+by default. Use `--background transparent` to keep transparency, or choose any
+explicit output color.
 
-Automatic detection is a heuristic for simple flat backgrounds, not semantic
-segmentation. It can mistake artwork touching the border for background.
-Explicit colors are interpreted in the input's RGB color space. Tolerance is a
-per-channel RGB difference, not a perceptual color distance. The script does not
-recover antialiased edges blended into an opaque background: halos may remain,
-and increasing tolerance can remove foreground detail. Complex backgrounds,
-photos, and gradients generally need a prepared mask. Empty foreground is an error.
+When the image contains two backgrounds, use `--background-layers 2`:
 
-## Flat tiles with rounded corners
+```bash
+./circle-img.py -i colored-circle.png --background-layers 2
+```
 
-Use `--source-background edge --background auto` to fit the artwork inside a flat
-colored tile and reuse the tile's background color in the output. Normal automatic
-detection and the default white output remain unchanged when these options are absent.
+Layers are counted **outside inward**; they are not file-format layers:
 
-Edge mode requires at least 95% of the middle half of **each** edge to agree on one
-opaque color. Its default tolerance is 8 per RGB channel to allow small compression
-variations; `--tolerance` overrides it. It removes border-connected pixels matching
-that color, then separately checks any remaining corner-connected regions.
+| Input | Default: one layer | Two layers |
+| --- | --- | --- |
+| Artwork on a flat opaque color | Fit artwork; reuse that color | Attempt another background; reject if none can be identified confidently |
+| Colored circle on transparency | Fit the entire circle; white output background | Exclude transparency and circle color; fit inner artwork and reuse circle color |
+| Colored tile with white rounded corners | Exclude white corner remnants; fit the colored tile on white | Exclude corners and tile color; fit inner artwork and reuse tile color |
 
-Corner cleanup requires four patches with similar colors and sizes, confined to
-less than a quarter of the shorter image dimension from each corner. The patches
-must narrow inward and have colors consistent with a blend into the main background
-(the corner blend check allows up to 24 levels of per-channel variation, or the
-specified tolerance if larger). A clean flat background or transparent corners
-needs no such cleanup. Unrecognized content touching an edge, inconsistent corners,
-and inputs smaller than 8 pixels on either axis are rejected. Fully transparent
-edges cannot supply an opaque background color; use normal alpha detection instead.
+Output color is independent of the layer count: `--background white`, another
+color, or `transparent` overrides the detected output color. Each image in a
+batch gets its own detected color. The 256-pixel minimum still applies; use
+`--min-size 0` for the tightest fit without enlarging the artwork.
 
-The background and corner colors are **not** flood-filled together: that would risk
-removing enclosed artwork of the same color as the corners. Retained foreground
-pixels and enclosed details are preserved. The configurable minimum canvas size
-(default 256 pixels) still applies, so padding may remain even after the tile is
-excluded from fitting. Use `--min-size 0` for the tightest fit. Artwork is never
-enlarged to fill that space.
+### Detection and limitations
 
-This is a heuristic for simple flat tiles, not semantic segmentation. Matching
-marks in all four corners can be indistinguishable from background remnants. Use
-an explicit source color or a prepared mask when the assumption does not apply.
-Compression artifacts and foreground edges already blended with a background are
-not reconstructed; a different output color can reveal residual halos.
+For the first layer, any existing transparency defines foreground coverage:
+every nonzero alpha counts, including faint edges and shadows. For fully opaque
+images, at least 95% of the rectangular border must agree on one color. Matching
+pixels are removed by four-connected flood fill; enclosed same-colored details
+remain intact.
 
-`--background auto` requires `--source-background edge`. Explicit output colors and
-`transparent` remain supported; each image in a batch gets its own detected color.
+If the rectangular border disagrees, detection checks for a flat rounded tile
+with four matching corner remnants. At least 95% of the middle half of each edge
+must agree on the tile color. Corner patches must have similar colors and sizes,
+narrow inward, and fit within a quarter of the shorter image dimension. Their
+colors must be consistent with a blend into the tile color. Only the corners are
+excluded for one-layer fitting; the colored tile remains meaningful content.
+
+For layer two, the script samples inward from the visible shape's boundary,
+requiring 95% color agreement separately on all four sides. It removes connected
+background pixels and a narrow outer fringe, preserving enclosed details. The
+fringe band is 2–16 pixels, scaled to the visible shape's size; it allows partial
+alpha and up to 32 levels of RGB variation (or the specified tolerance if larger).
+Contrasting opaque content touching this boundary is rejected. The visible shape
+must be at least 12 pixels on each axis and provide enough opaque samples.
+
+Automatic detection uses a default per-channel RGB tolerance of 8 for small
+compression variations; `--tolerance` overrides it. It does not reconstruct
+foreground edges already blended into an opaque background. A different output
+color can reveal residual halos. Retained pixels are not resampled.
+
+This is a heuristic for simple flat backgrounds, not semantic segmentation.
+Artwork can resemble another background, particularly a solid border or frame.
+Matching marks in all four corners can resemble corner remnants. Two-layer mode
+intentionally treats the outer fringe as background, including faint marks there;
+use one layer or a mask when those marks are meaningful. Photos, gradients,
+uncertain boundaries, and missing second backgrounds may be rejected. Empty
+foreground is an error. The script does not silently fall back to one layer.
+
+### Advanced overrides
+
+- `--source-background COLOR` explicitly selects one opaque source color to
+  remove from the rectangular border, overriding alpha-based detection. With
+  automatic output color, that selected color is reused. Its default tolerance
+  is 0; supply `--tolerance` for approximate matching.
+- `--source-background edge` retains the earlier tile-specific shortcut: remove
+  the tile color and matching corner remnants together, reusing the tile color
+  by default. It requires opaque rectangular-edge samples, so it is unsuitable
+  for a circle surrounded by transparency. Prefer `--background-layers 2` for
+  the general two-background case.
+- `--mask FILE` defines coverage, multiplied by original alpha. White retains,
+  black removes, gray reduces alpha. Automatic output color is white because a
+  mask does not identify a background color. Explicit output colors still work.
+
+Source background and mask are mutually exclusive, and neither can be combined
+with `--background-layers 2`. A mask cannot be combined with a nonzero tolerance.
+Explicit colors are interpreted in the input's RGB color space. Enclosed areas
+are preserved by color-based removal; use a mask to remove those too.
 
 ## Geometry and quality
 
@@ -243,6 +267,16 @@ colors. Rebuild the fixture with:
 
 ```bash
 .venv/bin/python tests/fixtures/generate_rounded_tile.py
+```
+
+`tests/test_background_layers.py` independently validates a synthetic circle with
+an alpha/compression fringe, enclosed colors, and a disconnected alpha-1 mark.
+It covers outside-in layer selection, rounded corners, output color defaults and
+overrides, ambiguous or missing second backgrounds, margins, saved pixels, batch
+colors, minimum size, and advanced-option conflicts. Rebuild its fixture with:
+
+```bash
+.venv/bin/python tests/fixtures/generate_layered_circle.py
 ```
 
 `tests/test_min_size.py` checks the 256-pixel default, custom and disabled floors,

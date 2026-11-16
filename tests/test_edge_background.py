@@ -142,13 +142,14 @@ class EdgeBackgroundTests(unittest.TestCase):
                 with Image.open(destination/sources[0].name) as image:
                     self.assertEqual(image.getpixel((0,0)),app.color(bg))
 
-    def test_auto_requires_edge_mode_and_rejects_before_writing(self):
+    def test_auto_supports_default_layer_detection(self):
         with tempfile.TemporaryDirectory() as directory:
             target=Path(directory)/'out.png'
             run=self.cli('-i',ROOT/'tests/fixtures/rounded-tile.png','-o',target,'-b','auto')
-            self.assertNotEqual(run.returncode,0)
-            self.assertIn('--background auto requires --source-background edge',run.stderr)
-            self.assertFalse(target.exists())
+            self.assertEqual(run.returncode,0,run.stderr)
+            with Image.open(target) as output:
+                self.assertEqual(output.getpixel((0,0)), fixture.CORNER+(255,))
+                self.assertIn(fixture.BACKGROUND+(255,), output.get_flattened_data())
 
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 try:
-    from PIL import Image, ImageColor, ImageDraw, ImageOps, PngImagePlugin
+    from PIL import Image, ImageColor, ImageDraw, ImageOps, ImageFilter, PngImagePlugin
 except ModuleNotFoundError as exc:
     if exc.name != 'PIL' or __name__ != '__main__':
         raise
@@ -118,7 +118,7 @@ def foreground(image, source_background=None, tolerance=0, mask=None):
     return result, f'border-connected RGB {candidate}, tolerance {tolerance}'
 
 
-def edge_foreground(image, tolerance):
+def edge_foreground(image, tolerance, *, outer_only=False):
     """Infer a flat tile background and remove four matching corner remnants.
 
     Corner components are examined AFTER the main-color flood fill. They never
@@ -208,8 +208,128 @@ def edge_foreground(image, tolerance):
     # Any other border-connected artwork remains ambiguous; do not discard it.
     if any(ap[x, y] for y in (0, h-1) for x in range(w)) or any(ap[x, y] for x in (0, w-1) for y in range(h)):
         reject('unrecognized foreground touches an edge')
+    if outer_only:
+        if not patches:
+            reject('no separate outer corner background')
+        artwork = image.copy()
+        alpha = artwork.getchannel('A')
+        ap = alpha.load()
+        for patch in patches:
+            for x, y in patch:
+                ap[x, y] = 0
+        candidate = colors[0]
     artwork.putalpha(alpha)
     return artwork, candidate + (255,), f'edge RGB {candidate}, tolerance {tolerance}, corner patches {len(patches)}'
+
+
+def inner_background(image, tolerance):
+    """Peel a flat background along the visible silhouette, retaining enclosed detail.
+
+    A narrow exterior band tolerates alpha/compression fringes. Color inference
+    uses opaque samples inside that band, separately checked on all four sides.
+    This is deliberately a flat-background heuristic, not semantic segmentation.
+    """
+    alpha = image.getchannel('A')
+    bbox = alpha.getbbox()
+    def reject(reason):
+        raise ValueError(f'ambiguous background layer 2: {reason}; use one layer or --mask')
+    if bbox is None:
+        reject('no content remains after layer 1')
+    left, top, right, bottom = bbox
+    if min(right-left, bottom-top) < 12:
+        reject('visible shape is too small to sample')
+    band = max(2, min(16, min(right-left, bottom-top)//64))
+    # Pad before erosion so image edges are treated as exterior too.
+    opaque = Image.new('L', (image.width+2*band, image.height+2*band))
+    opaque.paste(alpha.point(lambda a: 255 if a == 255 else 0), (band, band))
+    def erode(mask):
+        for _ in range(band):
+            mask = mask.filter(ImageFilter.MinFilter(3))
+        return mask
+    core = erode(opaque).crop(
+        (band, band, band+image.width, band+image.height))
+    pixels = image.load()
+    sides = [[], [], [], []]
+    for y, x0, x1 in row_extents(core):
+        if top+(bottom-top)//4 <= y < bottom-(bottom-top)//4:
+            sides[0].append(pixels[x0,y][:3])
+            sides[1].append(pixels[x1,y][:3])
+    for x, y0, y1 in row_extents(core.transpose(Image.Transpose.TRANSPOSE)):
+        if left+(right-left)//4 <= x < right-(right-left)//4:
+            sides[2].append(pixels[x,y0][:3])
+            sides[3].append(pixels[x,y1][:3])
+    if any(len(side) < 4 for side in sides):
+        reject('not enough opaque boundary samples')
+    distance = lambda rgb, target: max(abs(rgb[c]-target[c]) for c in range(3))
+    samples = [rgb for side in sides for rgb in side]
+    seed = Counter(samples).most_common(1)[0][0]
+    inliers = [rgb for rgb in samples if distance(rgb, seed) <= tolerance]
+    candidate = tuple(sorted(rgb[c] for rgb in inliers)[len(inliers)//2] for c in range(3))
+    if any(sum(distance(rgb,candidate) <= tolerance for rgb in side)/len(side) < .95 for side in sides):
+        reject('the visible boundary does not agree on one opaque color')
+
+    w, h = image.size
+    original_alpha = alpha.tobytes()
+    silhouette = Image.new('L', opaque.size)
+    silhouette.paste(alpha.point(lambda a: 255 if a else 0), (band,band))
+    core_bytes = erode(silhouette).crop(
+        (band,band,band+w,band+h)).tobytes()
+    remaining = bytearray(original_alpha)
+    seen = bytearray(w*h)
+    queue = deque()
+    def visit(x,y):
+        i = y*w+x
+        if seen[i]:
+            return
+        seen[i] = 1
+        rgb = pixels[x,y]
+        matching = distance(rgb,candidate) <= tolerance
+        fringe = not core_bytes[i] and (rgb[3] < 255 or distance(rgb,candidate) <= max(32,tolerance))
+        if not original_alpha[i] or matching or fringe:
+            remaining[i] = 0
+            queue.append((x,y))
+        elif not core_bytes[i]:
+            reject('contrasting content touches the outer boundary')
+    for x in range(w):
+        visit(x,0); visit(x,h-1)
+    for y in range(h):
+        visit(0,y); visit(w-1,y)
+    while queue:
+        x,y = queue.popleft()
+        for nx,ny in ((x-1,y),(x+1,y),(x,y-1),(x,y+1)):
+            if 0 <= nx < w and 0 <= ny < h:
+                visit(nx,ny)
+    result = image.copy()
+    result.putalpha(Image.frombytes('L', image.size, bytes(remaining)))
+    if not result.getchannel('A').getbbox():
+        reject('no foreground remains after removing the second background')
+    return result, candidate+(255,), f'visible-boundary RGB {candidate}, tolerance {tolerance}'
+
+
+def layered_foreground(image, layers=1, tolerance=8):
+    """Exclude one or two outside-in backgrounds and return the output color."""
+    if layers not in (1,2):
+        raise ValueError('background-layers must be 1 or 2')
+    if image.getchannel('A').getextrema()[0] < 255:
+        artwork, background, method = image.copy(), (255,255,255,255), 'existing alpha (transparent background becomes white)'
+    else:
+        try:
+            artwork, method = foreground(image, tolerance=tolerance)
+        except ValueError:
+            try:
+                artwork, background, method = edge_foreground(image, tolerance, outer_only=True)
+            except ValueError as exc:
+                raise ValueError(f'ambiguous background: {exc}') from exc
+        else:
+            w,h = image.size
+            pixels = image.load()
+            border = [pixels[x,y][:3] for y in (0,h-1) for x in range(w)]
+            border += [pixels[x,y][:3] for x in (0,w-1) for y in range(1,h-1)]
+            background = Counter(border).most_common(1)[0][0]+(255,)
+    if layers == 2:
+        artwork, background, inner_method = inner_background(artwork,tolerance)
+        method += '; layer 2: '+inner_method
+    return artwork, background, method
 
 
 def row_extents(alpha):
@@ -371,14 +491,16 @@ def parser():
     p.add_argument('-o', '--output', type=Path, metavar='FILE|DIR',
                    help='PNG file or existing directory (keeps input name; non-PNG suffix becomes .png); '
                         'default: INPUT-circle.png')
-    p.add_argument('-b', '--background', default='white', help='color, transparent, or auto with --source-background edge (default: white)')
+    p.add_argument('-b', '--background', default='auto', help='color, transparent, or auto (default): reuse excluded background; transparency becomes white')
+    p.add_argument('--background-layers', type=int, choices=(1, 2), default=1,
+                   help='backgrounds to exclude, outside inward (default: 1); 2 also excludes an inner flat tile or circle')
     p.add_argument('--margin', type=int, default=0, help='minimum clearance from circle in pixels')
     p.add_argument('--min-size', type=int, default=256,
                    help='minimum output side in pixels; 0 disables the floor (default: 256); no artwork resizing')
     group = p.add_mutually_exclusive_group()
     group.add_argument('--source-background', help='opaque source background color, or edge for flat tiles with matching corners')
     group.add_argument('--mask', type=Path, help='grayscale foreground mask; white retains, black removes')
-    p.add_argument('--tolerance', type=int, help='maximum per-channel background difference, 0–255; default 8 in edge mode, otherwise 0')
+    p.add_argument('--tolerance', type=int, help='maximum per-channel background difference, 0–255; default 8 for automatic/edge detection, otherwise 0')
     p.add_argument('--preview', action='store_true', help='also save OUTPUT-stem-preview.png with circular crop')
     p.add_argument('-O', '--overwrite', action='store_true', help='replace existing outputs (never the input or mask)')
     p.add_argument('-v', '--verbose', action='store_true')
@@ -435,10 +557,13 @@ def process_image(source, destinations, args, background):
             mask = ImageOps.exif_transpose(supplied).copy()
     if args.source_background == 'edge':
         artwork, detected_background, method = edge_foreground(image, args.tolerance)
-        if background is None:
-            background = detected_background
-    else:
+    elif args.source_background is not None or mask is not None:
         artwork, method = foreground(image, args.source_background, args.tolerance, mask)
+        detected_background = color(args.source_background) if args.source_background else (255,255,255,255)
+    else:
+        artwork, detected_background, method = layered_foreground(image, args.background_layers, args.tolerance)
+    if background is None:
+        background = detected_background
     result, layer, offset = render(artwork, background, args.margin, args.min_size)
     save_png(result, output, info, args.overwrite)
     print(f'Saved {output} ({result.width} × {result.height})')
@@ -456,14 +581,14 @@ def main(argv=None):
         if args.min_size < 0:
             raise ValueError('min-size must be nonnegative')
         if args.tolerance is None:
-            args.tolerance = 8 if args.source_background == 'edge' else 0
+            args.tolerance = 8 if not args.mask and args.source_background in (None, 'edge') else 0
         if args.margin < 0 or not 0 <= args.tolerance <= 255:
             raise ValueError('margin must be nonnegative; tolerance must be between 0 and 255')
         if args.mask and args.tolerance:
             raise ValueError('--tolerance cannot be combined with --mask')
+        if args.background_layers != 1 and (args.source_background or args.mask):
+            raise ValueError('--background-layers 2 cannot be combined with --source-background or --mask')
         if args.background.lower() == 'auto':
-            if args.source_background != 'edge':
-                raise ValueError('--background auto requires --source-background edge')
             background = None
         else:
             background = color(args.background)
